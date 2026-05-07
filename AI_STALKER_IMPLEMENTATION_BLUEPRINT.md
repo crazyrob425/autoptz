@@ -74,7 +74,7 @@ AI‑Stalker is a **distributed NVR + AI orchestration platform** that can:
 | https://github.com/home-assistant/core | Device bridge | Standardized integration for smart devices. |
 | https://github.com/zigpy/zigpy | Zigbee | Optional direct Zigbee sensor support. |
 | https://github.com/rhasspy/rhasspy | Voice alerts | Local voice announcements & audio automation. |
-| https://github.com/bettercap/bettercap | BLE presence (authorized) | Use only for consent‑based discovery, no hijacking. |
+| https://github.com/hbldh/bleak | BLE presence (authorized) | Consent‑based discovery using OS BLE APIs. |
 
 ### Data, Storage & Databases
 | Repo | Planned Role | Integration Notes |
@@ -203,6 +203,7 @@ AI‑Stalker is a **distributed NVR + AI orchestration platform** that can:
 - Explicit **user consent** required for all device onboarding.
 - Data encryption in transit + at rest by default.
 - Audit trails for admin actions.
+- Prefer **defensive, OS‑level BLE libraries** (e.g., Bleak) over offensive tooling.
 
 ---
 

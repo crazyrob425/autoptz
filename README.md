@@ -81,7 +81,7 @@ These features are planned and detailed in the blueprint:
 ---
 
 ## Feature Matrix
-| Category | Now | Planned | Why It’s Different |
+| Category | Now | Planned | Key Differentiator |
 |---|---|---|---|
 | PTZ Control | ✅ | ✅ | VISCA automation + AI tracking baked in |
 | Multi‑Node Failover | ❌ | ✅ | “Next‑in‑Line” standby takeover |

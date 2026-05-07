@@ -62,9 +62,18 @@ begin
 end;
 
 function GetFailoverMinutes(Param: string): string;
+var
+  Minutes: Integer;
 begin
   if WizardIsTaskSelected('failsafe') then
-    Result := FailoverMinutesPage.Values[0]
+    Minutes := StrToIntDef(FailoverMinutesPage.Values[0], 5)
   else
-    Result := '5';
+    Minutes := 5;
+
+  if Minutes < 1 then
+    Minutes := 1;
+  if Minutes > 60 then
+    Minutes := 60;
+
+  Result := IntToStr(Minutes);
 end;
