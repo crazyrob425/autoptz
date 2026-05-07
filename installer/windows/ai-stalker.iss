@@ -22,8 +22,8 @@ WizardStyle=modern
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "service"; Description: "Install as a Windows Service (runs in background)"; Flags: unchecked
-Name: "failsafe"; Description: "Configure as Failsafe Node (standby takeover mode)"; Flags: unchecked
+Name: "service"; Description: "Install as a Windows Service (requires service-capable build)"; Flags: unchecked
+Name: "failsafe"; Description: "Configure as Failsafe Node (requires failsafe-capable build)"; Flags: unchecked
 Name: "desktopicon"; Description: "Create a desktop icon"; Flags: unchecked
 
 [Files]
@@ -37,13 +37,13 @@ Name: "{autodesktop}\\AI-Stalker"; Filename: "{app}\\{#AppExeName}"; Tasks: desk
 
 [Run]
 Filename: "{app}\\{#AppExeName}"; Description: "Launch AI-Stalker"; Flags: nowait postinstall skipifsilent
-Filename: "{sys}\\sc.exe"; Parameters: "create \"AIStalker\" binPath= \"{app}\\{#AppExeName} --service\" start= auto"; Tasks: service; Flags: runhidden
-Filename: "{sys}\\sc.exe"; Parameters: "description \"AIStalker\" \"AI-Stalker Background Service\""; Tasks: service; Flags: runhidden
-Filename: "{app}\\{#AppExeName}"; Parameters: "--configure --role failsafe --failover-minutes {code:GetFailoverMinutes}"; Tasks: failsafe; Flags: runhidden
+Filename: "{sys}\\sc.exe"; Parameters: "create \"AIStalker\" binPath= \"{app}\\{#AppExeName} --service\" start= auto"; Tasks: service; Flags: runhidden; Check: ShouldInstallService
+Filename: "{sys}\\sc.exe"; Parameters: "description \"AIStalker\" \"AI-Stalker Background Service\""; Tasks: service; Flags: runhidden; Check: ShouldInstallService
+Filename: "{app}\\{#AppExeName}"; Parameters: "--configure --role failsafe --failover-minutes {code:GetFailoverMinutes}"; Tasks: failsafe; Flags: runhidden; Check: ShouldConfigureFailsafe
 
 [UninstallRun]
-Filename: "{sys}\\sc.exe"; Parameters: "stop \"AIStalker\""; Tasks: service; Flags: runhidden
-Filename: "{sys}\\sc.exe"; Parameters: "delete \"AIStalker\""; Tasks: service; Flags: runhidden
+Filename: "{sys}\\sc.exe"; Parameters: "stop \"AIStalker\""; Tasks: service; Flags: runhidden; Check: AppSupportsService
+Filename: "{sys}\\sc.exe"; Parameters: "delete \"AIStalker\""; Tasks: service; Flags: runhidden; Check: AppSupportsService
 
 [Code]
 var
@@ -61,6 +61,26 @@ begin
   FailoverMinutesPage.Values[0] := '5';
 end;
 
+function AppSupportsService: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\\AIStalker.service-capable'));
+end;
+
+function AppSupportsFailsafe: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\\AIStalker.failsafe-capable'));
+end;
+
+function ShouldInstallService: Boolean;
+begin
+  Result := WizardIsTaskSelected('service') and AppSupportsService;
+end;
+
+function ShouldConfigureFailsafe: Boolean;
+begin
+  Result := WizardIsTaskSelected('failsafe') and AppSupportsFailsafe;
+end;
+
 function GetFailoverMinutes(Param: string): string;
 var
   Minutes: Integer;
@@ -76,4 +96,15 @@ begin
     Minutes := 60;
 
   Result := IntToStr(Minutes);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if WizardIsTaskSelected('service') and not AppSupportsService then
+      MsgBox('Service mode was selected, but this build is not service-capable yet.', mbInformation, MB_OK);
+    if WizardIsTaskSelected('failsafe') and not AppSupportsFailsafe then
+      MsgBox('Failsafe mode was selected, but this build is not failsafe-capable yet.', mbInformation, MB_OK);
+  end;
 end;

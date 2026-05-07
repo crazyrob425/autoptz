@@ -35,7 +35,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         # self.manager.ShareableList(sequence=[])
 
         # setting up main window
-        self.setObjectName("AIStalker")
+        self.setObjectName("AI_Stalker")
         self.resize(200, 450)
         self.setAutoFillBackground(False)
         self.setTabShape(QtWidgets.QTabWidget.TabShape.Rounded)
