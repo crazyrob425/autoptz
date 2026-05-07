@@ -35,7 +35,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         # self.manager.ShareableList(sequence=[])
 
         # setting up main window
-        self.setObjectName("AutoPTZ")
+        self.setObjectName("AIStalker")
         self.resize(200, 450)
         self.setAutoFillBackground(False)
         self.setTabShape(QtWidgets.QTabWidget.TabShape.Rounded)
@@ -761,7 +761,7 @@ class AutoPTZ_MainWindow(QMainWindow):
     def translateUi(self, AutoPTZ):
         """Translate Menu, Buttons, and Labels through localization"""
         _translate = QtCore.QCoreApplication.translate
-        AutoPTZ.setWindowTitle(_translate("AutoPTZ", "AutoPTZ"))
+        AutoPTZ.setWindowTitle(_translate("AutoPTZ", "AI-Stalker"))
         self.enable_track.setText(_translate("AutoPTZ", "Enable Tracking"))
         self.select_face_label.setText(_translate("AutoPTZ", "Select Face"))
         self.assign_network_ptz_btn.setText(
