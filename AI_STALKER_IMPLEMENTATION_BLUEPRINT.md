@@ -92,6 +92,29 @@ AI‑Stalker is a **distributed NVR + AI orchestration platform** that can:
 
 ---
 
+## 2.1) License Compatibility Tracker (Initial Pass)
+> Status is a planning aid and must be verified before implementation.
+
+| Repo | Expected License Family | Compatibility Status | Action |
+|---|---|---|---|
+| openface | Apache-style | Pending verification | Confirm SPDX + dependency transitives. |
+| insightface | MIT-style | Pending verification | Validate model/weights redistribution terms. |
+| openvino | Apache-style | Pending verification | Verify runtime redistribution obligations. |
+| triton-inference-server | BSD/Apache-style | Pending verification | Confirm container and model serving terms. |
+| raft/memberlist/nomad | MPL/HashiCorp licenses | Pending verification | Review copyleft boundary for embedding/linking. |
+| dragonboat | Apache-style | Pending verification | Validate static vs dynamic linkage approach. |
+| syncthing | MPL-style | Pending verification | Keep integration via process boundary where needed. |
+| ray | Apache-style | Pending verification | Verify cluster runtime packaging constraints. |
+| boinc | Mixed OSS | Pending verification | Use patterns/architecture, avoid direct code reuse until cleared. |
+| netdata/vector/nats | Mixed permissive | Pending verification | Review license notices for bundled binaries. |
+| home-assistant/zigpy/rhasspy | Mixed OSS | Pending verification | Validate plugin-level redistribution obligations. |
+| sled/kornia-rs/rust-cv | Mixed permissive | Pending verification | Verify crate-level licenses and notices. |
+| swift-nio/uvloop/sonic/workerman | Mixed permissive | Pending verification | Validate interoperability wrappers and notices. |
+| drbd/yugabyte/seatunnel | Mixed OSS/enterprise options | Pending verification | Confirm edition, terms, and operational limits. |
+| netstream-optimizer/fps_internet_optimizer/corecycler | Unknown | Pending verification | Perform full legal and security review before adoption. |
+
+---
+
 ## 3) Additional GitHub Discoveries (Search Results)
 > These are **additional repositories identified via GitHub search** that can inform integrations.
 
