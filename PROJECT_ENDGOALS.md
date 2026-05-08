@@ -24,7 +24,7 @@
   - **Trusted/ignored identities** (to reduce noise and operator fatigue).
   - **High-risk identities** prioritized for attention.
   - Event-level summaries for what happened during a visit.
-- **Behavior/emotion-style tagging** to provide operator context (e.g., anger/crying/drunk/tired) where the system can do so reliably.
+- **Behavioral context tagging** to provide operator awareness (e.g., distress, erratic movement, or falls) where the system can do so reliably.
 - **Alert categories** for likely theft / violence / suspicious behavior patterns (implementation must be careful, conservative, and explainable).
 - **Context capture**:
   - Who appeared (or stayed), and where.
