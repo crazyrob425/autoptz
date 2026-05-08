@@ -47,12 +47,27 @@ If your use case needs a lawyer, it’s not welcome here.
 ---
 
 ## What AI‑Stalker Is
-AI‑Stalker is a **distributed, AI‑enhanced NVR and security orchestrator** that scales from a single PC to a hardened multi‑node hive. It’s designed to:
+AI‑Stalker is a **distributed, AI‑enhanced local-first NVR + security orchestrator** that scales from a single PC into a **hardened multi‑node “security hive”**—built to keep your video and context in-house, keep your life calm, and keep contributors honest.
 
+**Blacklisted Binary Labs** edition: local-first power, consent-first discipline, and zero paywall nonsense.
+
+### The Blacklisted Binary Labs promise
+- **100% free in all ways:** no paywalls, no forced upgrades, no “pro-only” core capability locks.
+- **Local-first AI:** sensitive feeds and metadata stay on your network by default (cloud only if you explicitly choose it).
+- **Consent-based engineering:** for authorized security + automation use only.
+- **Auditable design:** if it matters, it’s inspectable—no “trust me” magic.
+
+### End goals (native from our end-goals doc)
+AI‑Stalker is designed to:
 - Run **fully local** (offline‑first), with optional hybrid cloud AI.
-- Coordinate **multiple computers** with **automatic failover**.
-- **Pool idle compute** from secondary nodes to boost inference.
+- Coordinate **multiple computers** with **automatic failover** (leader/failsafe chain).
+- **Pool idle compute** from secondary nodes to boost inference *only when idle*, with safe auto-retreat.
+- Deliver advanced monitoring: **PTZ automation (VISCA)**, **AI tracking**, **identity workflows** (trusted/ignored + high-risk priority), and **event summarization** (who arrived/left, who they interacted with, what they brought/left with, and behavior/context tagging where feasible).
+- Expand with authorized **repurposed user-owned devices** (cameras/mics today; repurposed smartphones later).
+- Provide advanced resilience: **cluster health + automatic continuity** if a node goes down.
+
 - Merge cameras, microphones, and sensors into a **single brain**.
+
 
 ---
 
