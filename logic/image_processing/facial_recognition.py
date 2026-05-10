@@ -4,9 +4,16 @@ import pickle
 from ctypes import c_char
 from multiprocessing import Value
 import cv2
-import face_recognition
 import numpy as np
 import shared.constants as constants
+
+# Gracefully handle missing face_recognition/dlib
+try:
+    import face_recognition
+    FACE_RECOGNITION_AVAILABLE = True
+except ImportError:
+    FACE_RECOGNITION_AVAILABLE = False
+    print("Warning: face_recognition not available. Facial recognition will be disabled.")
 
 
 class FacialRecognition:
@@ -18,6 +25,11 @@ class FacialRecognition:
         self.check_encodings()
 
     def recognize(self, frame):
+        if not FACE_RECOGNITION_AVAILABLE:
+            # Return empty face data when face_recognition isn't available
+            self.queue.put(([], [], []))
+            return
+        
         if frame.shape[2] == 4:
             # Convert from BGR or BGRA to RGB
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)

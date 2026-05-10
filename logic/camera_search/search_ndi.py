@@ -1,5 +1,12 @@
 import time
-import NDIlib as ndi
+
+# Gracefully handle missing NDI library
+try:
+    import NDIlib as ndi
+    NDI_AVAILABLE = True
+except ImportError:
+    NDI_AVAILABLE = False
+    print("Warning: NDIlib not available. NDI camera sources will not be detected.")
 
 
 def get_ndi_sources():
@@ -7,6 +14,10 @@ def get_ndi_sources():
     Returns NDI sources found by NDILib
     :return:
     """
+    if not NDI_AVAILABLE:
+        print("NDI not available - returning empty sources")
+        return []
+    
     if not ndi.initialize():
         return 0
 

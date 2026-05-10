@@ -1,20 +1,35 @@
 import math
 import os
-import dlib
+import numpy as np
+import cv2
+import time
+import mediapipe as mp
+from multiprocessing import Process, Value, Queue
+import imutils
 from PySide6 import QtGui
 from PySide6.QtWidgets import QLabel
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt, Signal, QTimer
-import cv2
-import time
-import NDIlib as ndi
-import numpy as np
-import mediapipe as mp
+
+# Gracefully handle missing dlib
+try:
+    import dlib
+    DLIB_AVAILABLE = True
+except ImportError:
+    DLIB_AVAILABLE = False
+    print("Warning: dlib not available. Face tracking will be disabled.")
+
+# Gracefully handle missing NDI
+try:
+    import NDIlib as ndi
+    NDI_AVAILABLE = True
+except ImportError:
+    NDI_AVAILABLE = False
+    print("Warning: NDIlib not available. NDI camera sources will not be detected.")
+
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.image_processing.facial_recognition import FacialRecognition
 import shared.constants as constants
-from multiprocessing import Process, Value, Queue
-import imutils
 
 
 def run_body_pose_estimation(shared_frames, body_pose_queue, objectName, stop_signal):
@@ -51,6 +66,10 @@ def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 5000)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 5000)
     else:
+        if not NDI_AVAILABLE:
+            print(f"NDI not available - skipping NDI source: {source}")
+            return
+            
         sources = get_ndi_sources()
         source = next(
             (src for src in sources if src.ndi_name == source), None)
@@ -71,17 +90,19 @@ def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
                     shared_frames.pop(0)  # Remove the oldest frame
                 shared_frames.append(cv_img)
         else:
-            ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 1000)
-            if ret == ndi.FRAME_TYPE_VIDEO:
-                cv_img = np.copy(v.data)
-                ndi.recv_free_video_v2(ndi_recv, v)
-                cv_img = imutils.resize(cv_img, width)
-                if len(shared_frames) >= 10:
-                    shared_frames.pop(0)  # Remove the oldest frame
-                shared_frames.append(cv_img)
+            if NDI_AVAILABLE:
+                ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 1000)
+                if ret == ndi.FRAME_TYPE_VIDEO:
+                    cv_img = np.copy(v.data)
+                    ndi.recv_free_video_v2(ndi_recv, v)
+                    cv_img = imutils.resize(cv_img, width)
+                    if len(shared_frames) >= 10:
+                        shared_frames.pop(0)  # Remove the oldest frame
+                    shared_frames.append(cv_img)
     if isNDI:
-        ndi.recv_destroy(ndi_recv)
-        ndi.destroy()
+        if NDI_AVAILABLE:
+            ndi.recv_destroy(ndi_recv)
+            ndi.destroy()
     else:
         cap.release()
 
@@ -131,16 +152,22 @@ class CameraWidget(QLabel):
         self.ptz_controller = None
 
         if isNDI:
-            ndi_recv_create = ndi.RecvCreateV3(source_to_connect_to=source)
-            ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_METADATA_ONLY
-            ndi_recv = ndi.recv_create_v3(ndi_recv_create)
-            ndi.recv_connect(ndi_recv, source)
-            for i in range(2):
-                ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 5000)
-                if ndi.recv_ptz_is_supported(instance=ndi_recv):
+            if NDI_AVAILABLE:
+                ndi_recv_create = ndi.RecvCreateV3(source_to_connect_to=source)
+                ndi_recv_create.bandwidth = ndi.RECV_BANDWIDTH_METADATA_ONLY
+                ndi_recv = ndi.recv_create_v3(ndi_recv_create)
+                ndi.recv_connect(ndi_recv, source)
+                for i in range(2):
+                    ret, v, _, _ = ndi.recv_capture_v2(ndi_recv, 5000)
+                    if ndi.recv_ptz_is_supported(instance=ndi_recv):
+                        print(
+                            f"This NDI Source {source.ndi_name} Supports PTZ Movement")
+                        self.ptz_controller = ndi_recv
+            else:
+                if isNDI:
                     print(
-                        f"This NDI Source {source.ndi_name} Supports PTZ Movement")
-                    self.ptz_controller = ndi_recv
+                        f"This NDI Source {source.ndi_name} Does NOT Supports PTZ Movement (NDI not available)")
+                self.ptz_controller = None
         else:
             if isNDI:
                 print(
@@ -199,8 +226,9 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(
-                    instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                if NDI_AVAILABLE:
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
         self.stop_signal.value = True
         self.deleteLater()
         self.destroy()
@@ -216,8 +244,9 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
-                self.ptz_controller.close_connection()
+                if NDI_AVAILABLE:
+                    ndi.recv_ptz_pan_tilt_speed(instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                    self.ptz_controller.close_connection()
         self.ptz_controller = control
         self.ptz_is_usb = isUSB
 
@@ -238,8 +267,9 @@ class CameraWidget(QLabel):
             if self.ptz_is_usb:
                 self.ptz_controller.move_stop()
             else:
-                ndi.recv_ptz_pan_tilt_speed(
-                    instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                if NDI_AVAILABLE:
+                    ndi.recv_ptz_pan_tilt_speed(
+                        instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
 
     def restart_facial_recogntion(self):
@@ -408,23 +438,25 @@ class CameraWidget(QLabel):
             # Check if the body pose intersects or is near the face
             if face_rectangle and self.rectangles_overlap(body_rectangle, face_rectangle) and self.is_tracking:
                 # Reinitialize the dlib tracker with the new body pose data
-                self.tracker = dlib.correlation_tracker()
-                self.tracker.start_track(
-                    rgb_frame, dlib.rectangle(*body_rectangle))
-            elif self.tracker and self.is_tracking:
-                # Get the current tracker position
-                tracker_rect = self.tracker.get_position()
-                tracker_rect = (int(tracker_rect.left()), int(tracker_rect.top()),
-                                int(tracker_rect.right()), int(tracker_rect.bottom()))
-
-                # Check if the tracker rectangle is inside the body rectangle or if they intersect significantly
-                if self.rectangles_overlap(tracker_rect, body_rectangle):
+                if DLIB_AVAILABLE:
                     self.tracker = dlib.correlation_tracker()
                     self.tracker.start_track(
                         rgb_frame, dlib.rectangle(*body_rectangle))
-                else:
-                    # Continue to update the tracker
-                    self.tracker.update(rgb_frame)
+            elif self.tracker and self.is_tracking:
+                # Get the current tracker position
+                if DLIB_AVAILABLE and self.tracker:
+                    tracker_rect = self.tracker.get_position()
+                    tracker_rect = (int(tracker_rect.left()), int(tracker_rect.top()),
+                                    int(tracker_rect.right()), int(tracker_rect.bottom()))
+
+                    # Check if the tracker rectangle is inside the body rectangle or if they intersect significantly
+                    if self.rectangles_overlap(tracker_rect, body_rectangle):
+                        self.tracker = dlib.correlation_tracker()
+                        self.tracker.start_track(
+                            rgb_frame, dlib.rectangle(*body_rectangle))
+                    else:
+                        # Continue to update the tracker
+                        self.tracker.update(rgb_frame)
 
         if self.is_tracking and self.tracked_name:
             cv2.putText(frame, f"TRACKING {self.tracked_name.upper()}",
@@ -553,15 +585,16 @@ class CameraWidget(QLabel):
                         getattr(self.ptz_controller,
                                 f"move_{direction}_track")(speed_x)
                 else:
-                    if direction == "stop":
-                        ndi.recv_ptz_pan_tilt_speed(
-                            instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
-                    else:
-                        # Determine the direction of movement for NDI camera
-                        pan_speed = speed_x if "left" in direction else -speed_x
-                        tilt_speed = speed_y if "up" in direction else -speed_y
-                        ndi.recv_ptz_pan_tilt_speed(
-                            instance=self.ptz_controller, pan_speed=pan_speed, tilt_speed=tilt_speed)
+                    if NDI_AVAILABLE:
+                        if direction == "stop":
+                            ndi.recv_ptz_pan_tilt_speed(
+                                instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
+                        else:
+                            # Determine the direction of movement for NDI camera
+                            pan_speed = speed_x if "left" in direction else -speed_x
+                            tilt_speed = speed_y if "up" in direction else -speed_y
+                            ndi.recv_ptz_pan_tilt_speed(
+                                instance=self.ptz_controller, pan_speed=pan_speed, tilt_speed=tilt_speed)
                 self.last_request = direction
                 break
 
