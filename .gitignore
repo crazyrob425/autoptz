@@ -5,6 +5,8 @@
 /views/homepage/__pycache__
 /logic/image_processing/__pycache__
 /logic/camera_search/__pycache__
+/logic/camera_search/camera_credentials.json
+/logic/camera_search/camera_registry.db
 /facial_recognition/__pycache__
 /views/vapix.log
 /logic/image_processing/models/trainer.json

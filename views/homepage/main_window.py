@@ -3,6 +3,7 @@ from multiprocessing import Manager
 # from multiprocess import managers
 import os
 from functools import partial
+from urllib.parse import urlparse
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtMultimedia import QMediaDevices
 from PySide6.QtWidgets import QMainWindow
@@ -11,11 +12,15 @@ import watchdog.observers
 import shared.constants as constants
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.camera_search.auto_discovery import CameraAutoDiscovery
+from logic.camera_search.credential_manager import CameraCredentialManager
+from logic.camera_search.camera_registry import CameraRegistry
 from libraries.visca.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
 from shared.message_prompts import show_info_messagebox
 from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
+from views.functions.ip_credentials_dialog import IPCredentialsDialog
+from views.functions.network_scan_worker import NetworkScanWorker
 from views.homepage.flow_layout import FlowLayout
 from views.homepage.overview import GridOverview
 from views.homepage.recorded_library import RecordedLibrary
@@ -37,6 +42,11 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.active_camera_widgets = []
         self.view_mode_auto = True
         self.network_camera_urls = set()
+        self.credential_manager = CameraCredentialManager()
+        self.camera_registry = CameraRegistry()
+        self.scan_thread = None
+        self.scan_worker = None
+        self.scan_progress_dialog = None
 
         # self.manager = managers.SharedMemoryManager()
         # self.manager.ShareableList(sequence=[])
@@ -444,7 +454,10 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionClose.setObjectName("actionClose")
         self.actionAdd_IP = QtWidgets.QWidgetAction(self)
         self.actionAdd_IP.setObjectName("actionAdd_IP")
-        self.actionAdd_IP.triggered.connect(self.auto_add_network_cameras)
+        self.actionAdd_IP.triggered.connect(self.start_auto_scan_async)
+        self.actionManage_IP_Credentials = QtWidgets.QWidgetAction(self)
+        self.actionManage_IP_Credentials.setObjectName("actionManage_IP_Credentials")
+        self.actionManage_IP_Credentials.triggered.connect(self.open_credentials_dialog)
         self.menuAdd_NDI = QtWidgets.QMenu(self)
         self.menuAdd_NDI.setObjectName("menuAdd_NDI")
         self.menuAdd_Hardware = QtWidgets.QMenu(self)
@@ -481,6 +494,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuSource.addMenu(self.menuAdd_Hardware)
         self.menuSource.addMenu(self.menuAdd_IP_Cameras)
         self.menuSource.addSeparator()
+        self.menuSource.addAction(self.actionManage_IP_Credentials)
         self.menuSource.addAction(self.actionEdit)
         self.menuFacial_Recognition.addAction(self.actionAdd_Face)
         self.menuFacial_Recognition.addAction(self.actionRemove_Face)
@@ -504,9 +518,78 @@ class AutoPTZ_MainWindow(QMainWindow):
         observer.schedule(self.watch_trainer,
                           path=constants.TRAINER_PATH, recursive=True)
         observer.start()
+
+        # registry health / reconnect loop
+        self.registry_health_timer = QtCore.QTimer(self)
+        self.registry_health_timer.timeout.connect(self.run_registry_health_check)
+        self.registry_health_timer.start(20000)
+
+        # bootstrap previously enabled cameras from registry
+        self.bootstrap_registry_cameras(max_count=12)
+
         self.translateUi(self)
         self.apply_default_view_count()
         QtCore.QMetaObject.connectSlotsByName(self)
+
+    def open_credentials_dialog(self):
+        dlg = IPCredentialsDialog(self.credential_manager, self)
+        dlg.exec()
+
+    def start_auto_scan_async(self):
+        """Start cancellable async network scan and auto-onboard cameras."""
+        if self.scan_thread is not None:
+            show_info_messagebox(info_message="A scan is already running.")
+            return
+
+        self.scan_progress_dialog = QtWidgets.QProgressDialog("Scanning local network...", "Cancel", 0, 0, self)
+        self.scan_progress_dialog.setWindowTitle("Network Camera Discovery")
+        self.scan_progress_dialog.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        self.scan_progress_dialog.setMinimumDuration(0)
+
+        self.scan_thread = QtCore.QThread(self)
+        self.scan_worker = NetworkScanWorker(credential_manager=self.credential_manager)
+        self.scan_worker.moveToThread(self.scan_thread)
+
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_worker.progress.connect(self.on_scan_progress)
+        self.scan_worker.finished.connect(self.on_scan_finished)
+        self.scan_worker.failed.connect(self.on_scan_failed)
+        self.scan_worker.cancelled.connect(self.on_scan_cancelled)
+
+        self.scan_progress_dialog.canceled.connect(self.scan_worker.cancel)
+        self.scan_worker.finished.connect(self.scan_thread.quit)
+        self.scan_worker.failed.connect(self.scan_thread.quit)
+        self.scan_worker.cancelled.connect(self.scan_thread.quit)
+        self.scan_thread.finished.connect(self._cleanup_scan_thread)
+
+        self.scan_thread.start()
+
+    def _cleanup_scan_thread(self):
+        self.scan_thread = None
+        self.scan_worker = None
+        if self.scan_progress_dialog is not None:
+            self.scan_progress_dialog.close()
+            self.scan_progress_dialog = None
+
+    def on_scan_progress(self, message, value, total):
+        if self.scan_progress_dialog is None:
+            return
+        if total > 0:
+            self.scan_progress_dialog.setRange(0, total)
+            self.scan_progress_dialog.setValue(value)
+        else:
+            self.scan_progress_dialog.setRange(0, 0)
+        self.scan_progress_dialog.setLabelText(message)
+
+    def on_scan_failed(self, error_message):
+        self.statusbar.showMessage("Auto-discovery failed", 5000)
+        show_info_messagebox(info_message=f"Discovery failed: {error_message}")
+
+    def on_scan_cancelled(self):
+        self.statusbar.showMessage("Auto-discovery cancelled", 5000)
+
+    def on_scan_finished(self, found):
+        self.auto_add_network_cameras(found)
 
     def _default_view_count_for_camera_total(self, camera_count):
         if camera_count <= 1:
@@ -617,13 +700,11 @@ class AutoPTZ_MainWindow(QMainWindow):
         camera_widget.stop()
         camera_widget.deleteLater()
 
-    def auto_add_network_cameras(self):
-        """Scan local network and auto-add discoverable IP cameras with minimal user input."""
-        self.statusbar.showMessage("Scanning local network for IP cameras...")
-        QtWidgets.QApplication.processEvents()
-
-        discovery = CameraAutoDiscovery()
-        found = discovery.discover()
+    def auto_add_network_cameras(self, found=None):
+        """Auto-add discoverable IP cameras from provided discovery results."""
+        if found is None:
+            discovery = CameraAutoDiscovery()
+            found = discovery.discover(credential_manager=self.credential_manager)
 
         if not found:
             self.statusbar.showMessage("No network cameras discovered", 5000)
@@ -633,7 +714,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         added = 0
         listed = 0
         for cam in found:
-            rtsp_url = cam.get("suggested_rtsp_url")
+            rtsp_url = cam.get("onvif_stream_uri") or cam.get("suggested_rtsp_url")
 
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setCheckable(True)
@@ -653,6 +734,14 @@ class AutoPTZ_MainWindow(QMainWindow):
             if rtsp_url and rtsp_url not in self.network_camera_urls:
                 self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
                 added += 1
+                self.camera_registry.upsert_camera(
+                    ip=cam.get("ip", ""),
+                    label=cam.get("label", rtsp_url),
+                    rtsp_url=rtsp_url,
+                    communication_method=cam.get("communication_method", "RTSP"),
+                    confidence=cam.get("confidence", 0.5),
+                    reconnect_policy='aggressive',
+                )
 
             # Keep UI manageable: auto-add up to 12 discovered feeds in one pass
             if added >= 12:
@@ -660,6 +749,77 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         self.statusbar.showMessage(f"Auto-discovery complete: added {added} / listed {listed} network camera candidates", 8000)
         show_info_messagebox(info_message=f"Discovery complete. Added {added} IP cameras automatically and listed {listed} candidates.")
+
+    @staticmethod
+    def _rtsp_host_port(rtsp_url):
+        try:
+            parsed = urlparse(rtsp_url)
+            host = parsed.hostname
+            port = parsed.port or 554
+            return host, port
+        except Exception:
+            return None, None
+
+    @staticmethod
+    def _tcp_check(host, port, timeout=0.5):
+        import socket
+        if not host or not port:
+            return False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            return sock.connect_ex((host, port)) == 0
+        except Exception:
+            return False
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def bootstrap_registry_cameras(self, max_count=12):
+        """On startup, rehydrate enabled cameras from persistent registry."""
+        enabled = self.camera_registry.list_enabled()
+        count = 0
+        for cam in enabled:
+            rtsp_url = cam.get("rtsp_url")
+            if not rtsp_url or rtsp_url in self.network_camera_urls:
+                continue
+
+            menu_item = QtWidgets.QWidgetAction(self)
+            menu_item.setCheckable(True)
+            menu_item.setText(f"{cam.get('label', 'IP Cam')} [{cam.get('communication_method', 'RTSP')} | {cam.get('confidence', 0)}]")
+            menu_item.triggered.connect(self.create_lambda(
+                src=rtsp_url, menu_item=menu_item, isNDI=False))
+            self.menuAdd_IP_Cameras.addAction(menu_item)
+
+            self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
+            count += 1
+            if count >= max_count:
+                break
+
+    def run_registry_health_check(self):
+        """Periodic health checks and reconnect behavior based on registry policy."""
+        enabled = self.camera_registry.list_enabled()
+        for cam in enabled:
+            rtsp_url = cam.get("rtsp_url")
+            host, port = self._rtsp_host_port(rtsp_url)
+            healthy = self._tcp_check(host, port)
+
+            if healthy:
+                self.camera_registry.update_health(rtsp_url, status="online")
+            else:
+                self.camera_registry.update_health(rtsp_url, status="offline", last_error="TCP connect failed")
+
+            # reconnect policy: re-add when healthy and not currently loaded
+            if healthy and cam.get("reconnect_policy") == "aggressive" and rtsp_url not in self.network_camera_urls:
+                menu_item = QtWidgets.QWidgetAction(self)
+                menu_item.setCheckable(True)
+                menu_item.setText(f"{cam.get('label', 'IP Cam')} [{cam.get('communication_method', 'RTSP')} | {cam.get('confidence', 0)}]")
+                menu_item.triggered.connect(self.create_lambda(
+                    src=rtsp_url, menu_item=menu_item, isNDI=False))
+                self.menuAdd_IP_Cameras.addAction(menu_item)
+                self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
 
     def updateElements(self):
         """
@@ -941,6 +1101,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuAdd_NDI.setTitle(_translate("AutoPTZ", "Add NDI"))
         self.menuAdd_Hardware.setTitle(_translate("AutoPTZ", "Add Hardware"))
         self.menuAdd_IP_Cameras.setTitle(_translate("AutoPTZ", "Add IP Cameras"))
+        self.actionManage_IP_Credentials.setText(_translate("AutoPTZ", "Manage IP Credentials"))
         self.actionEdit.setText(_translate("AutoPTZ", "Edit Setup"))
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))

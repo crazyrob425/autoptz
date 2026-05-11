@@ -1,6 +1,7 @@
 import ipaddress
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from logic.camera_search.onvif_profiles import resolve_onvif_stream_uri
 
 
 try:
@@ -124,7 +125,7 @@ def _nmap_host_scan(cidr):
     return discovered
 
 
-def _threaded_host_scan(cidr, timeout=0.2, max_workers=128):
+def _threaded_host_scan(cidr, timeout=0.2, max_workers=128, should_cancel=None, progress_cb=None):
     discovered = {}
     network = ipaddress.ip_network(cidr, strict=False)
     hosts = [str(h) for h in network.hosts()]
@@ -135,10 +136,17 @@ def _threaded_host_scan(cidr, timeout=0.2, max_workers=128):
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(scan_one, h) for h in hosts]
+        completed = 0
+        total = len(futures)
         for fut in as_completed(futures):
+            if should_cancel and should_cancel():
+                return discovered
             host, ports = fut.result()
             if ports:
                 discovered[host] = sorted(ports)
+            completed += 1
+            if progress_cb:
+                progress_cb({"stage": "port-scan", "message": f"Scanning {cidr}", "value": completed, "total": total})
     return discovered
 
 
@@ -178,24 +186,34 @@ def _suggest_rtsp_url(host, open_ports):
 class CameraAutoDiscovery:
     """Fast local camera discovery with protocol inference and confidence scoring."""
 
-    def discover(self, cidrs=None):
+    def discover(self, cidrs=None, progress_cb=None, should_cancel=None, credential_manager=None):
         cidrs = cidrs or detect_local_subnets()
         all_hosts = {}
+        if progress_cb:
+            progress_cb({"stage": "init", "message": "Preparing subnet scan", "value": 0, "total": max(1, len(cidrs))})
 
-        for cidr in cidrs:
+        for i, cidr in enumerate(cidrs, start=1):
+            if should_cancel and should_cancel():
+                return []
             try:
                 if NMAP_AVAILABLE:
                     found = _nmap_host_scan(cidr)
+                    if progress_cb:
+                        progress_cb({"stage": "port-scan", "message": f"Scanned {cidr}", "value": i, "total": len(cidrs)})
                 else:
-                    found = _threaded_host_scan(cidr)
+                    found = _threaded_host_scan(cidr, should_cancel=should_cancel, progress_cb=progress_cb)
                 all_hosts.update(found)
             except Exception:
                 continue
 
         results = []
-        for ip, open_ports in all_hosts.items():
+        total_hosts = max(1, len(all_hosts))
+        for idx, (ip, open_ports) in enumerate(all_hosts.items(), start=1):
+            if should_cancel and should_cancel():
+                return results
             supports_rtsp = False
             supports_onvif = False
+            onvif_stream_uri = None
 
             if 554 in open_ports or 8554 in open_ports:
                 rtsp_port = 554 if 554 in open_ports else 8554
@@ -205,6 +223,12 @@ class CameraAutoDiscovery:
                 if p in open_ports and _probe_onvif_http(ip, p):
                     supports_onvif = True
                     break
+
+            if supports_onvif:
+                onvif_stream = resolve_onvif_stream_uri(ip, credential_manager=credential_manager)
+                if onvif_stream and onvif_stream.get("uri"):
+                    onvif_stream_uri = onvif_stream.get("uri")
+                    supports_rtsp = True
 
             method = _guess_comm_method(supports_onvif, supports_rtsp, open_ports)
             score = _heuristic_score(open_ports, supports_onvif, supports_rtsp)
@@ -218,6 +242,10 @@ class CameraAutoDiscovery:
                 "communication_method": method,
                 "confidence": score,
                 "suggested_rtsp_url": _suggest_rtsp_url(ip, open_ports),
+                "onvif_stream_uri": onvif_stream_uri,
             })
+
+            if progress_cb:
+                progress_cb({"stage": "probe", "message": f"Probing {ip}", "value": idx, "total": total_hosts})
 
         return sorted(results, key=lambda x: x["confidence"], reverse=True)
