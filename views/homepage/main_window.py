@@ -39,6 +39,18 @@ except ImportError as e:
     import logging
     logging.debug(f"AI Setup Wizard not available: {e}")
 
+# Cloud Services imports (gracefully optional)
+try:
+    from logic.cloud.google_oauth_manager import GoogleOAuthManager
+    from logic.cloud.cloud_backup_manager import CloudBackupManager
+    from logic.cloud.failsafe_node import FailsafeNode, FailsafeConfig
+    from views.functions.cloud_settings_dialog import CloudSettingsDialog
+    CLOUD_SERVICES_AVAILABLE = True
+except ImportError as e:
+    CLOUD_SERVICES_AVAILABLE = False
+    import logging
+    logging.debug(f"Cloud Services not available: {e}")
+
 
 class AutoPTZ_MainWindow(QMainWindow):
     """
@@ -58,6 +70,38 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.scan_thread = None
         self.scan_worker = None
         self.scan_progress_dialog = None
+
+        # Initialize cloud services
+        if CLOUD_SERVICES_AVAILABLE:
+            try:
+                self.oauth_manager = GoogleOAuthManager()
+                self.backup_manager = CloudBackupManager(
+                    oauth_manager=self.oauth_manager,
+                    data_dir=constants.TRAINER_PATH if hasattr(constants, 'TRAINER_PATH') else None
+                )
+                failsafe_config = FailsafeConfig(
+                    enabled=True,
+                    backup_interval_hours=6,
+                    auto_sync_to_cloud=True,
+                    max_local_backups=5,
+                )
+                self.failsafe_node = FailsafeNode(
+                    backup_manager=self.backup_manager,
+                    oauth_manager=self.oauth_manager,
+                    config=failsafe_config
+                )
+                # Start failsafe monitoring
+                self.failsafe_node.start()
+            except Exception as e:
+                import logging
+                logging.warning(f"Failed to initialize cloud services: {e}")
+                self.oauth_manager = None
+                self.backup_manager = None
+                self.failsafe_node = None
+        else:
+            self.oauth_manager = None
+            self.backup_manager = None
+            self.failsafe_node = None
 
         # self.manager = managers.SharedMemoryManager()
         # self.manager.ShareableList(sequence=[])
@@ -488,6 +532,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionContact.setObjectName("actionContact")
         self.actionAbout = QtWidgets.QWidgetAction(self)
         self.actionAbout.setObjectName("actionAbout")
+        
+        # Cloud Settings action
+        if CLOUD_SERVICES_AVAILABLE:
+            self.actionCloudSettings = QtWidgets.QWidgetAction(self)
+            self.actionCloudSettings.setObjectName("actionCloudSettings")
+            self.actionCloudSettings.triggered.connect(self.open_cloud_settings_dialog)
+        
         self.actionAdd_Face = QtWidgets.QWidgetAction(self)
         self.actionAdd_Face.setObjectName("actionAdd_Face")
         self.actionAdd_Face.triggered.connect(
@@ -521,6 +572,9 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuFacial_Recognition.addSeparator()
         self.menuFacial_Recognition.addAction(self.actionReset_Database)
         self.menuHelp.addAction(self.actionAbout)
+        if CLOUD_SERVICES_AVAILABLE:
+            self.menuHelp.addSeparator()
+            self.menuHelp.addAction(self.actionCloudSettings)
         self.menuHelp.addSeparator()
         self.menuHelp.addAction(self.actionContact)
         self.menubar.addAction(self.menuFile.menuAction())
@@ -588,6 +642,32 @@ class AutoPTZ_MainWindow(QMainWindow):
             import logging
             logging.exception("Setup wizard error")
             show_info_messagebox(info_message=f"Setup wizard error: {str(e)}")
+
+    def open_cloud_settings_dialog(self):
+        """Open cloud settings and backup management dialog"""
+        if not CLOUD_SERVICES_AVAILABLE:
+            show_info_messagebox(info_message="Cloud Services requires additional dependencies.\nPlease install: pip install google-auth-oauthlib google-api-python-client google-cloud-storage")
+            return
+
+        try:
+            dialog = CloudSettingsDialog(
+                oauth_manager=self.oauth_manager,
+                backup_manager=self.backup_manager,
+                failsafe_node=self.failsafe_node,
+                parent=self
+            )
+
+            dialog.backup_updated.connect(self._on_backup_updated)
+            dialog.exec()
+
+        except Exception as e:
+            import logging
+            logging.exception("Cloud settings error")
+            show_info_messagebox(info_message=f"Cloud settings error: {str(e)}")
+
+    def _on_backup_updated(self):
+        """Handle backup update (e.g., after restore)"""
+        self.statusbar.showMessage("Backup updated - you may need to restart for full effect", 5000)
 
     def start_auto_scan_async(self):
         """Start cancellable async network scan and auto-onboard cameras."""
@@ -1061,10 +1141,25 @@ class AutoPTZ_MainWindow(QMainWindow):
             constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
             constants.IN_USE_USB_PTZ_DEVICES.remove(
                 constants.CURRENT_ACTIVE_PTZ_DEVICE)
-            constants.ASSIGNED_USB_PTZ_CAMERA_WIDGETS.remove(
-                constants.CURRENT_ACTIVE_CAM_WIDGET)
-            self.unassign_usb_ptz_btn.hide()
-            self.assign_usb_ptz_btn.show()
+
+    def closeEvent(self, event):
+        """Handle application close event - cleanup resources"""
+        try:
+            # Stop failsafe node if available
+            if CLOUD_SERVICES_AVAILABLE and hasattr(self, 'failsafe_node') and self.failsafe_node:
+                self.failsafe_node.stop()
+        except Exception as e:
+            import logging
+            logging.error(f"Error stopping failsafe node: {e}")
+        
+        # Clean up scan thread if running
+        try:
+            self._cleanup_scan_thread()
+        except Exception as e:
+            import logging
+            logging.error(f"Error cleaning up scan thread: {e}")
+        
+        event.accept()
 
     def assign_network_ptz_dlg(self):
         """Launch the Assign Network PTZ to Camera Source dialog."""
@@ -1161,6 +1256,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionEdit.setText(_translate("AutoPTZ", "Edit Setup"))
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))
+        if CLOUD_SERVICES_AVAILABLE:
+            self.actionCloudSettings.setText(_translate("AutoPTZ", "☁️ Cloud Backup & Settings"))
         self.actionAdd_Face.setText(_translate("AutoPTZ", "Add Face"))
         self.actionRemove_Face.setText(_translate("AutoPTZ", "Remove Face"))
         self.actionReset_Database.setText(
