@@ -16,6 +16,9 @@ from shared.message_prompts import show_info_messagebox
 from views.functions.show_dialogs_ui import ShowDialog
 from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
 from views.homepage.flow_layout import FlowLayout
+from views.homepage.overview import GridOverview
+from views.homepage.recorded_library import RecordedLibrary
+from PySide6.QtWidgets import QStackedWidget, QWidget
 from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
 
@@ -364,9 +367,38 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         self.gridLayout.addWidget(self.formTabWidget, 0, 0, 3, 1)
 
-        # enabled cameras view
-        self.flowLayout = FlowLayout()
-        self.gridLayout.addLayout(self.flowLayout, 0, 1, 1, 1)
+        # enabled cameras view (stack: flow layout / overview / library)
+        self.camera_stack = QStackedWidget()
+
+        # flow layout wrapper
+        flow_wrapper = QWidget()
+        flow_layout = FlowLayout()
+        flow_wrapper.setLayout(flow_layout)
+        self.flowLayout = flow_layout
+
+        # overview and library views
+        self.overview = GridOverview()
+        self.recorded_library = RecordedLibrary()
+
+        # add pages to stack
+        self.camera_stack.addWidget(flow_wrapper)
+        self.camera_stack.addWidget(self.overview)
+        self.camera_stack.addWidget(self.recorded_library)
+
+        # default to flow layout
+        self.camera_stack.setCurrentIndex(0)
+        self.gridLayout.addWidget(self.camera_stack, 0, 1, 1, 1)
+
+        # quick view switch buttons
+        self.switch_overview_btn = QtWidgets.QPushButton('Overview')
+        self.switch_library_btn = QtWidgets.QPushButton('Library')
+        self.switch_grid_btn = QtWidgets.QPushButton('Grid')
+        self.switch_overview_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.overview))
+        self.switch_library_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.recorded_library))
+        self.switch_grid_btn.clicked.connect(lambda: self.camera_stack.setCurrentIndex(0))
+        self.menu_layout.addWidget(self.switch_grid_btn)
+        self.menu_layout.addWidget(self.switch_overview_btn)
+        self.menu_layout.addWidget(self.switch_library_btn)
 
         # handling camera window sizing
         self.screen_width = self.screen().availableGeometry().width()
