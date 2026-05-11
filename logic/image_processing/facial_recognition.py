@@ -17,11 +17,12 @@ except ImportError:
 
 
 class FacialRecognition:
-    def __init__(self, queue, objectName):
+    def __init__(self, queue, objectName, confidence_threshold=0.6):
         self.known_face_encodings = None
         self.queue = queue
         self.add_face_name = Value(c_char * 50)
         self.objectName = objectName
+        self.confidence_threshold = confidence_threshold  # Threshold for face matching (0.0-1.0)
         self.check_encodings()
 
     def recognize(self, frame):
@@ -56,9 +57,9 @@ class FacialRecognition:
 
         for face_encoding in face_encodings:
             matches = face_recognition.compare_faces(
-                self.known_face_encodings['encodings'], face_encoding)
+                self.known_face_encodings['encodings'], face_encoding, tolerance=self.confidence_threshold)
             name = "Unknown"
-            confidence = ''
+            confidence = 0.0
 
             face_distances = face_recognition.face_distance(
                 self.known_face_encodings['encodings'], face_encoding)
@@ -68,10 +69,18 @@ class FacialRecognition:
                 continue
 
             best_match_index = np.argmin(face_distances)
-            if matches[best_match_index]:
+            best_distance = face_distances[best_match_index]
+            
+            # Apply confidence threshold - only accept matches below threshold distance
+            if best_distance < self.confidence_threshold and matches[best_match_index]:
                 name = self.known_face_encodings['names'][best_match_index]
-                confidence = self.face_confidence(
-                    face_distances[best_match_index])
+                confidence_str = self.face_confidence(best_distance, self.confidence_threshold)
+                # Extract numeric value from percentage string
+                confidence = float(confidence_str.replace('%', '')) / 100.0
+            else:
+                # Face doesn't meet confidence threshold
+                confidence = 0.0
+            
             face_names.append(name)
             confidence_list.append(confidence)
         face_details = (face_locations, face_names, confidence_list)

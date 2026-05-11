@@ -2,20 +2,31 @@ import os
 import sqlite3
 import threading
 from datetime import datetime
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class CameraRegistry:
     """Persistent registry of discovered/managed network cameras."""
 
     def __init__(self, db_path=None):
-        root = os.path.abspath(os.curdir)
-        self.db_path = db_path or os.path.join(root, "logic", "camera_search", "camera_registry.db")
+        # Use a stable, writable per-user location by default.
+        # This avoids failures when app is launched from non-writable CWDs.
+        data_dir = os.getenv("AUTOPTZ_DATA_DIR") or os.path.expanduser("~/.autoptz/data")
+        self.db_path = db_path or os.path.join(data_dir, "camera_registry.db")
         self._lock = threading.Lock()
+        self._db_error_reported = False
         self._ensure_db()
+
+    def _connect(self):
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        return sqlite3.connect(self.db_path, timeout=5)
 
     def _ensure_db(self):
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        with self._lock, sqlite3.connect(self.db_path) as conn:
+        with self._lock, self._connect() as conn:
             c = conn.cursor()
             c.execute(
                 '''
@@ -40,7 +51,7 @@ class CameraRegistry:
 
     def upsert_camera(self, ip, label, rtsp_url, communication_method, confidence, enabled=1, reconnect_policy='aggressive'):
         now = datetime.utcnow().isoformat()
-        with self._lock, sqlite3.connect(self.db_path) as conn:
+        with self._lock, self._connect() as conn:
             c = conn.cursor()
             c.execute(
                 '''
@@ -60,23 +71,48 @@ class CameraRegistry:
             conn.commit()
 
     def list_enabled(self):
-        with self._lock, sqlite3.connect(self.db_path) as conn:
-            c = conn.cursor()
-            c.execute(
-                '''
-                SELECT ip, label, rtsp_url, communication_method, confidence, reconnect_policy, status, last_seen, last_error
-                FROM cameras
-                WHERE enabled = 1
-                ORDER BY confidence DESC
-                '''
-            )
-            rows = c.fetchall()
-            cols = ["ip", "label", "rtsp_url", "communication_method", "confidence", "reconnect_policy", "status", "last_seen", "last_error"]
-            return [dict(zip(cols, r)) for r in rows]
+        try:
+            with self._lock, self._connect() as conn:
+                c = conn.cursor()
+                c.execute(
+                    '''
+                    SELECT ip, label, rtsp_url, communication_method, confidence, reconnect_policy, status, last_seen, last_error
+                    FROM cameras
+                    WHERE enabled = 1
+                    ORDER BY confidence DESC
+                    '''
+                )
+                rows = c.fetchall()
+                cols = ["ip", "label", "rtsp_url", "communication_method", "confidence", "reconnect_policy", "status", "last_seen", "last_error"]
+                self._db_error_reported = False
+                return [dict(zip(cols, r)) for r in rows]
+        except sqlite3.OperationalError as exc:
+            # Attempt one self-heal and avoid traceback spam in recurring timers.
+            try:
+                self._ensure_db()
+                with self._lock, self._connect() as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        '''
+                        SELECT ip, label, rtsp_url, communication_method, confidence, reconnect_policy, status, last_seen, last_error
+                        FROM cameras
+                        WHERE enabled = 1
+                        ORDER BY confidence DESC
+                        '''
+                    )
+                    rows = c.fetchall()
+                    cols = ["ip", "label", "rtsp_url", "communication_method", "confidence", "reconnect_policy", "status", "last_seen", "last_error"]
+                    self._db_error_reported = False
+                    return [dict(zip(cols, r)) for r in rows]
+            except Exception:
+                if not self._db_error_reported:
+                    logger.error("Camera registry unavailable at %s: %s", self.db_path, exc)
+                    self._db_error_reported = True
+                return []
 
     def update_health(self, rtsp_url, status, last_error=None):
         now = datetime.utcnow().isoformat()
-        with self._lock, sqlite3.connect(self.db_path) as conn:
+        with self._lock, self._connect() as conn:
             c = conn.cursor()
             c.execute(
                 '''

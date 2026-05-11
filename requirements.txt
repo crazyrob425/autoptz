@@ -24,4 +24,5 @@ google-auth-httplib2
 google-api-python-client
 google-cloud-storage
 requests
+openai
 # conda install -c conda-forge dlib

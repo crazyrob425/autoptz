@@ -29,6 +29,7 @@ except ImportError:
 
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.image_processing.facial_recognition import FacialRecognition
+from logic.recording.recorder import Recorder
 import shared.constants as constants
 
 
@@ -141,6 +142,11 @@ class CameraWidget(QLabel):
         self.isNDI = isNDI
         self.setProperty('active', False)
         self.setStyleSheet(constants.CAMERA_STYLESHEET)
+        
+        # Initialize event recorder
+        self.recorder = Recorder()
+        self._last_logged_face = None  # Track last logged face to avoid spam
+        self._tracking_start_logged = False  # Track if we've logged tracking start
         if self.isNDI:
             self.setText(f"Camera Source: {source.ndi_name}")
             self.setObjectName(f"Camera Source: {source.ndi_name}")
@@ -278,6 +284,18 @@ class CameraWidget(QLabel):
                     ndi.recv_ptz_pan_tilt_speed(
                         instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
             self.last_request = None
+        
+        # Log tracking state change
+        try:
+            state = "started" if self.is_tracking else "stopped"
+            self.recorder.add_record(
+                camera=self.objectName(),
+                event_type=f"tracking_{state}",
+                person_name=self.tracked_name if self.is_tracking else None,
+                notes=f"Tracking {state} for {self.tracked_name if self.is_tracking else 'N/A'}"
+            )
+        except Exception as e:
+            print(f"Failed to log tracking event: {e}")
 
     def restart_facial_recogntion(self):
         print(
@@ -414,6 +432,23 @@ class CameraWidget(QLabel):
                 right *= 2
                 bottom *= 2
                 left *= 2
+
+                # Log face detection if confidence is above threshold
+                try:
+                    confidence_val = float(confidence) if confidence else 0.0
+                    if name != "Unknown" and confidence_val > 0.5:  # Only log recognized faces
+                        # Avoid logging the same face repeatedly
+                        log_key = f"{name}_{confidence_val:.2f}"
+                        if self._last_logged_face != log_key:
+                            self.recorder.add_record(
+                                camera=self.objectName(),
+                                event_type="face_detection",
+                                person_name=name,
+                                notes=f"Confidence: {confidence_val:.2f}"
+                            )
+                            self._last_logged_face = log_key
+                except Exception as e:
+                    print(f"Failed to log face detection: {e}")
 
                 # Draw face rectangle and labels
                 cv2.rectangle(frame, (left, top),
@@ -602,6 +637,19 @@ class CameraWidget(QLabel):
                             tilt_speed = speed_y if "up" in direction else -speed_y
                             ndi.recv_ptz_pan_tilt_speed(
                                 instance=self.ptz_controller, pan_speed=pan_speed, tilt_speed=tilt_speed)
+                
+                # Log PTZ movement if direction changed
+                if self.last_request != direction and direction != "stop":
+                    try:
+                        self.recorder.add_record(
+                            camera=self.objectName(),
+                            event_type="ptz_movement",
+                            person_name=self.tracked_name,
+                            notes=f"PTZ moved {direction} (speed_x={speed_x:.2f}, speed_y={speed_y:.2f})"
+                        )
+                    except Exception as e:
+                        print(f"Failed to log PTZ movement: {e}")
+                
                 self.last_request = direction
                 break
 

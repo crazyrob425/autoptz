@@ -74,41 +74,129 @@ AI‑Stalker is designed to:
 ## Current Capabilities (Today)
 These features exist in the current codebase:
 
-- ✅ **Live camera feeds** (USB and NDI; RTSP under development)
-- ✅ **Facial recognition & tracking**
+### Phase 1: Network & Discovery ✅
+- ✅ **Live camera feeds** (USB, NDI, RTSP with embedded auth)
+- ✅ **Network auto-discovery** (Nmap + socket probing)
+- ✅ **Credential management** (CRUD operations, encrypted storage)
+- ✅ **Camera registry** (SQLite persistence, health tracking)
+
+### Phase 2: AI Setup & Tracking ✅
+- ✅ **Facial recognition & tracking** (dlib + face_recognition)
 - ✅ **Automated PTZ movement** via VISCA (network + USB)
+- ✅ **AI setup wizard** (Claude API + MCP tools)
+- ✅ **ONVIF capability probing** (auto-detect camera capabilities)
+- ✅ **Sensitivity configuration** (face confidence, motion thresholds)
+
+### Phase 3: Cloud & Failsafe ✅
+- ✅ **Google OAuth 2.0** (token persistence, auto-refresh)
+- ✅ **Cloud backup manager** (7 data categories, local-first)
+- ✅ **Google Drive sync** (upload/download/delete backups)
+- ✅ **Failsafe node** (automated backups, cloud sync scheduling)
+- ✅ **Cloud settings UI** (4-tab configuration interface)
+
+### Phase 3.5: Multi-AI Support ✅
+- ✅ **OpenAI API support** (GPT-4o-mini integration)
+- ✅ **Anthropic Claude** (3.5 Sonnet + MCP tools)
+- ✅ **Provider auto-detection** (environment-based routing)
+- ✅ **User environment files** (`~/.autoptz/.env` configuration)
+
+### Phase 4: Event Logging & Analytics ✅ (NEW)
+- ✅ **Automatic event logging** (face detections, PTZ movements, tracking state)
+- ✅ **Confidence threshold enforcement** (default 0.6, configurable)
+- ✅ **Smart deduplication** (prevents log spam)
+- ✅ **Event search & filters** (full-text, camera, event type)
+- ✅ **Event statistics** (real-time analytics by type)
+- ✅ **Enhanced recorded library UI** (split-pane details + stats)
+
+### Infrastructure & UI ✅
 - ✅ **Cross‑platform runtime** (Windows/macOS)
-- ✅ **Qt UI** for control and monitoring
+- ✅ **PySide6 Qt UI** (responsive grid layout)
+- ✅ **QThread workers** (async operations, non-blocking)
+- ✅ **Graceful degradation** (optional dependencies)
 
 ---
 
 ## Planned Capabilities (Roadmap)
-These features are planned and detailed in the blueprint:
+These features are under active development or planned for future releases:
 
-- 🧠 **Multi‑LLM orchestration** (local + hosted AI providers)
-- ⚡ **OpenVINO / Triton inference** for CPU‑optimized AI
-- 🧩 **Pluggable AI backends** (InsightFace, OpenFace, Kornia)
+### Phase 5: Multi-Node & Clustering (Planned)
 - 🛰️ **Failover node chain** with automatic takeover (1–60 min delay)
 - 🐝 **Hive mode**: use idle computers for AI compute + storage
-- 🧰 **Smart‑home device integration** (lights, locks, sensors)
 - 🧾 **Observability pipeline** for logs + events across all nodes
+- 📊 **Cluster health monitoring** (automatic continuity)
+
+### Phase 6: Advanced AI & Analytics (Planned)
+- 🧠 **Multi‑LLM orchestration** improvements (context preservation)
+- ⚡ **OpenVINO / Triton inference** for CPU‑optimized AI
+- 🧩 **Pluggable AI backends** (InsightFace, OpenFace, Kornia)
+- 📈 **Behavior tagging** (identity workflows, risk scoring)
+- 🎬 **Video playback with timeline** (event-based scrubbing)
+
+### Phase 7: Smart Integration & Alerts (Planned)
+- 🧰 **Smart‑home device integration** (lights, locks, sensors)
+- 🔔 **Event notifications** (email, push, webhooks)
+- 🎯 **Advanced alert cascade** (multi-zone correlation)
+- 📤 **Event export** (CSV, JSON, streaming APIs)
 
 ---
 
 ## Feature Matrix
+
 | Category | Now | Planned | Key Differentiator |
 |---|---|---|---|
-| PTZ Control | ✅ | ✅ | VISCA automation + AI tracking baked in |
-| Multi‑Node Failover | ❌ | ✅ | “Next‑in‑Line” standby takeover |
-| Hive Compute | ❌ | ✅ | Idle resource pooling without user disruption |
-| LLM Orchestration | ❌ | ✅ | Local‑first, cloud‑optional routing |
-| Smart‑Home Bridge | ❌ | ✅ | Device‑level automation from security events |
-| Observability | ❌ | ✅ | Real‑time pipeline across all nodes |
+| **Camera Ingest** | ✅ | ✅ | USB, NDI, RTSP with embedded auth |
+| **Network Discovery** | ✅ | ✅ | Nmap + socket probing + ONVIF |
+| **Facial Recognition** | ✅ | ✅ | dlib + face_recognition + tracking |
+| **PTZ Control** | ✅ | ✅ | VISCA automation + AI tracking baked in |
+| **Confidence Thresholds** | ✅ | ✅ | Smart filtering to reduce false positives |
+| **Event Logging** | ✅ | ✅ | Auto-log face detections, PTZ, tracking |
+| **Event Search & Analytics** | ✅ | ✅ | Full-text search + filters + statistics |
+| **AI Setup Wizard** | ✅ | ✅ | MCP tools for capability discovery |
+| **Multi-AI Support** | ✅ | ✅ | Claude + OpenAI (auto-detect) |
+| **Cloud Backup** | ✅ | ✅ | Google Drive integration + failsafe |
+| **Multi‑Node Failover** | ❌ | ✅ | "Next‑in‑Line" standby takeover |
+| **Hive Compute** | ❌ | ✅ | Idle resource pooling without user disruption |
+| **Smart‑Home Bridge** | ❌ | ✅ | Device‑level automation from security events |
+| **Advanced Analytics** | ❌ | ✅ | Behavior tagging + risk scoring |
+| **Video Playback** | ❌ | ✅ | Timeline scrubber with event markers |
+
+---
+
+## TODO & Development Roadmap
+
+### ✅ Completed (Phase 1-4)
+- [x] Network discovery + credential management
+- [x] Facial recognition + PTZ auto-tracking
+- [x] AI setup wizard (Claude + MCP)
+- [x] OpenAI integration + env detection
+- [x] Google OAuth + cloud backup + failsafe
+- [x] Event logging + confidence thresholds
+- [x] Event search/filters/statistics UI
+
+### 🚀 Active Development (Phase 5-7)
+- [ ] Multi-node failover clustering
+- [ ] Hive mode (idle compute pooling)
+- [ ] Observability pipeline (cross-node logs)
+- [ ] Advanced behavior tagging
+- [ ] Video playback with timeline
+- [ ] Smart-home device integration
+- [ ] Event notifications + webhooks
+- [ ] Performance optimization + monitoring
+
+### 📋 Backlog (Phase 8+)
+- [ ] Microphone integration
+- [ ] Advanced sensor support
+- [ ] Repurposed device onboarding
+- [ ] Custom AI model support
+- [ ] Distributed storage (DRBD/Syncthing)
+- [ ] Zero-trust networking
 
 ---
 
 ## Competitive Advantages (Why This Stands Out)
 - **Local‑first AI:** keep sensitive video on your network.
+- **Event-driven architecture:** automatic logging, filtering, analytics.
+- **Multi-AI support:** Claude + OpenAI with auto-detection.
 - **Failover baked in:** not a bolt‑on, not a manual script.
 - **Hive compute:** idle machines become a privacy‑friendly AI cluster.
 - **Protocol agnostic:** USB/NDI/RTSP/ONVIF with no vendor lock‑in.

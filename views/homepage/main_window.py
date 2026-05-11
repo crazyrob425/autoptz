@@ -616,11 +616,41 @@ class AutoPTZ_MainWindow(QMainWindow):
             return
 
         try:
+            # Ensure env keys are available even when started from alternate launchers.
+            project_env = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '.env')
+            user_env = os.path.expanduser('~/.autoptz/.env')
+            for env_path in (project_env, user_env):
+                if os.path.exists(env_path):
+                    try:
+                        with open(env_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line or line.startswith('#') or '=' not in line:
+                                    continue
+                                k, v = line.split('=', 1)
+                                os.environ.setdefault(k.strip(), v.strip().strip('"'))
+                    except Exception:
+                        pass
+
+            openai_key = os.getenv("OPENAI_API_KEY")
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+            if not openai_key and not anthropic_key:
+                show_info_messagebox(
+                    info_message=(
+                        "No AI API key found.\n"
+                        "Set OPENAI_API_KEY in d:/aistalker/.env (recommended) "
+                        "or set ANTHROPIC_API_KEY."
+                    )
+                )
+                return
+
             # Initialize MCP server with camera operations
             mcp_server = CameraSetupMCPServer()
 
             # Initialize AI controller
             ai_controller = WizardAIController(
+                api_key=openai_key or anthropic_key,
+                provider='openai' if openai_key else 'anthropic',
                 mcp_server=mcp_server
             )
 
@@ -934,26 +964,34 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def run_registry_health_check(self):
         """Periodic health checks and reconnect behavior based on registry policy."""
-        enabled = self.camera_registry.list_enabled()
+        try:
+            enabled = self.camera_registry.list_enabled()
+        except Exception:
+            # Fail-safe: never let health timer crash or spam traces.
+            return
+
         for cam in enabled:
-            rtsp_url = cam.get("rtsp_url")
-            host, port = self._rtsp_host_port(rtsp_url)
-            healthy = self._tcp_check(host, port)
+            try:
+                rtsp_url = cam.get("rtsp_url")
+                host, port = self._rtsp_host_port(rtsp_url)
+                healthy = self._tcp_check(host, port)
 
-            if healthy:
-                self.camera_registry.update_health(rtsp_url, status="online")
-            else:
-                self.camera_registry.update_health(rtsp_url, status="offline", last_error="TCP connect failed")
+                if healthy:
+                    self.camera_registry.update_health(rtsp_url, status="online")
+                else:
+                    self.camera_registry.update_health(rtsp_url, status="offline", last_error="TCP connect failed")
 
-            # reconnect policy: re-add when healthy and not currently loaded
-            if healthy and cam.get("reconnect_policy") == "aggressive" and rtsp_url not in self.network_camera_urls:
-                menu_item = QtWidgets.QWidgetAction(self)
-                menu_item.setCheckable(True)
-                menu_item.setText(f"{cam.get('label', 'IP Cam')} [{cam.get('communication_method', 'RTSP')} | {cam.get('confidence', 0)}]")
-                menu_item.triggered.connect(self.create_lambda(
-                    src=rtsp_url, menu_item=menu_item, isNDI=False))
-                self.menuAdd_IP_Cameras.addAction(menu_item)
-                self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
+                # reconnect policy: re-add when healthy and not currently loaded
+                if healthy and cam.get("reconnect_policy") == "aggressive" and rtsp_url not in self.network_camera_urls:
+                    menu_item = QtWidgets.QWidgetAction(self)
+                    menu_item.setCheckable(True)
+                    menu_item.setText(f"{cam.get('label', 'IP Cam')} [{cam.get('communication_method', 'RTSP')} | {cam.get('confidence', 0)}]")
+                    menu_item.triggered.connect(self.create_lambda(
+                        src=rtsp_url, menu_item=menu_item, isNDI=False))
+                    self.menuAdd_IP_Cameras.addAction(menu_item)
+                    self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
+            except Exception:
+                continue
 
     def updateElements(self):
         """

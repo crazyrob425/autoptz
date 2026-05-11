@@ -27,7 +27,7 @@ class WizardAIController:
     Handles conversation loop, tool execution, and state management.
     """
 
-    def __init__(self, api_key: Optional[str] = None, mcp_server=None):
+    def __init__(self, api_key: Optional[str] = None, mcp_server=None, provider: Optional[str] = None):
         """
         Initialize AI controller.
         
@@ -35,7 +35,17 @@ class WizardAIController:
             api_key: Anthropic API key (or read from env)
             mcp_server: MCP server instance providing tools
         """
-        self.api_key = api_key or self._get_api_key()
+        # Determine provider: explicit value wins, then env-based detection.
+        import os
+        if provider in ('openai', 'anthropic'):
+            self.provider = provider
+        else:
+            self.provider = 'anthropic'
+            if os.getenv('OPENAI_API_KEY'):
+                self.provider = 'openai'
+
+        # Keep api_key optional and resolve lazily when starting conversation
+        self.api_key = api_key
         self.mcp_server = mcp_server
         self.conversation_history: List[Dict] = []
         self.setup_state = {
@@ -45,11 +55,21 @@ class WizardAIController:
         }
 
     def _get_api_key(self) -> str:
-        """Get Anthropic API key from environment"""
+        """Get API key from environment depending on provider"""
         import os
+        # Re-evaluate provider if OPENAI key was injected after construction.
+        if os.getenv("OPENAI_API_KEY"):
+            self.provider = 'openai'
+
+        if self.provider == 'openai':
+            key = os.getenv("OPENAI_API_KEY")
+            if not key:
+                raise ValueError("OPENAI_API_KEY environment variable not set")
+            return key
+
         key = os.getenv("ANTHROPIC_API_KEY")
         if not key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+            raise ValueError("No AI API key found. Set OPENAI_API_KEY (recommended) or ANTHROPIC_API_KEY.")
         return key
 
     def get_system_prompt(self) -> str:
@@ -85,12 +105,9 @@ When you call tools, be explicit about what you're doing and why."""
         Returns:
             AIWizardMessage with assistant response
         """
-        try:
-            from anthropic import Anthropic
-        except ImportError:
-            raise ImportError("anthropic package required. Install with: pip install anthropic")
-
-        client = Anthropic(api_key=self.api_key)
+        # Ensure api_key available (resolve lazily)
+        if not self.api_key:
+            self.api_key = self._get_api_key()
 
         # Build initial message if needed
         if not user_message:
@@ -102,34 +119,63 @@ When you call tools, be explicit about what you're doing and why."""
             "content": user_message
         })
 
-        # Get tools from MCP server
+        # Get tools from MCP server (Anthropic supports typed tools; OpenAI adapter currently does not)
         tools = self.mcp_server.define_tools() if self.mcp_server else []
 
-        # Call Claude with tools
-        response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=4096,
-            system=self.get_system_prompt(),
-            tools=tools if tools else None,
-            messages=self.conversation_history,
-        )
-
-        # Process response
         assistant_message = {
             "role": "assistant",
             "content": "",
             "tool_calls": []
         }
 
-        for content_block in response.content:
-            if hasattr(content_block, 'text'):
-                assistant_message["content"] = content_block.text
-            elif hasattr(content_block, 'type') and content_block.type == "tool_use":
-                assistant_message["tool_calls"].append({
-                    "id": content_block.id,
-                    "name": content_block.name,
-                    "input": content_block.input,
-                })
+        if self.provider == 'openai':
+            # Use OpenAI adapter
+            from logic.ai_setup.openai_adapter import chat_completion
+
+            # Convert our conversation_history into OpenAI message format
+            messages = []
+            # include a system prompt
+            messages.append({"role": "system", "content": self.get_system_prompt()})
+            for m in self.conversation_history:
+                role = m.get('role', 'user')
+                content = m.get('content') if isinstance(m.get('content'), str) else json.dumps(m.get('content'))
+                messages.append({"role": role, "content": content})
+
+            resp = chat_completion(messages=messages, model="gpt-4o-mini", max_tokens=2048, api_key=self.api_key)
+
+            # resp['content'] is a list of {'text':...}
+            for block in resp.get('content', []):
+                if 'text' in block:
+                    assistant_message['content'] += block['text']
+
+        else:
+            # Anthropic path
+            try:
+                from anthropic import Anthropic
+            except ImportError:
+                raise ImportError("anthropic package required. Install with: pip install anthropic")
+
+            client = Anthropic(api_key=self.api_key)
+
+            # Call Claude with tools
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=4096,
+                system=self.get_system_prompt(),
+                tools=tools if tools else None,
+                messages=self.conversation_history,
+            )
+
+            # Process response
+            for content_block in response.content:
+                if hasattr(content_block, 'text'):
+                    assistant_message["content"] = content_block.text
+                elif hasattr(content_block, 'type') and content_block.type == "tool_use":
+                    assistant_message["tool_calls"].append({
+                        "id": content_block.id,
+                        "name": content_block.name,
+                        "input": content_block.input,
+                    })
 
         # Add to history
         self.conversation_history.append(assistant_message)
