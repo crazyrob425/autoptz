@@ -10,6 +10,7 @@ import watchdog.events
 import watchdog.observers
 import shared.constants as constants
 from logic.camera_search.search_ndi import get_ndi_sources
+from logic.camera_search.auto_discovery import CameraAutoDiscovery
 from libraries.visca.move_visca_ptz import ViscaPTZ
 from logic.camera_search.get_serial_cameras import COMPorts
 from shared.message_prompts import show_info_messagebox
@@ -33,6 +34,9 @@ class AutoPTZ_MainWindow(QMainWindow):
         # setting up the UI and QT Threading
         super(AutoPTZ_MainWindow, self).__init__(*args, **kwargs)
         self.manager = Manager()
+        self.active_camera_widgets = []
+        self.view_mode_auto = True
+        self.network_camera_urls = set()
 
         # self.manager = managers.SharedMemoryManager()
         # self.manager.ShareableList(sequence=[])
@@ -393,12 +397,19 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.switch_overview_btn = QtWidgets.QPushButton('Overview')
         self.switch_library_btn = QtWidgets.QPushButton('Library')
         self.switch_grid_btn = QtWidgets.QPushButton('Grid')
+        self.view_count_label = QtWidgets.QLabel('Views:')
+        self.view_count_combo = QtWidgets.QComboBox()
+        self.view_count_combo.addItems(['Auto', '1', '4', '6', '9', '12'])
+        self.view_count_combo.setCurrentText('Auto')
+        self.view_count_combo.currentTextChanged.connect(self.handle_view_count_change)
         self.switch_overview_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.overview))
         self.switch_library_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.recorded_library))
         self.switch_grid_btn.clicked.connect(lambda: self.camera_stack.setCurrentIndex(0))
         self.menu_layout.addWidget(self.switch_grid_btn)
         self.menu_layout.addWidget(self.switch_overview_btn)
         self.menu_layout.addWidget(self.switch_library_btn)
+        self.menu_layout.addWidget(self.view_count_label)
+        self.menu_layout.addWidget(self.view_count_combo)
 
         # handling camera window sizing
         self.screen_width = self.screen().availableGeometry().width()
@@ -433,10 +444,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionClose.setObjectName("actionClose")
         self.actionAdd_IP = QtWidgets.QWidgetAction(self)
         self.actionAdd_IP.setObjectName("actionAdd_IP")
+        self.actionAdd_IP.triggered.connect(self.auto_add_network_cameras)
         self.menuAdd_NDI = QtWidgets.QMenu(self)
         self.menuAdd_NDI.setObjectName("menuAdd_NDI")
         self.menuAdd_Hardware = QtWidgets.QMenu(self)
         self.menuAdd_Hardware.setObjectName("menuAdd_Hardware")
+        self.menuAdd_IP_Cameras = QtWidgets.QMenu(self)
+        self.menuAdd_IP_Cameras.setObjectName("menuAdd_IP_Cameras")
         self.actionEdit = QtWidgets.QWidgetAction(self)
         self.actionEdit.setObjectName("actionEdit")
         self.actionContact = QtWidgets.QWidgetAction(self)
@@ -465,6 +479,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuSource.addAction(self.actionAdd_IP)
         self.menuSource.addMenu(self.menuAdd_NDI)
         self.menuSource.addMenu(self.menuAdd_Hardware)
+        self.menuSource.addMenu(self.menuAdd_IP_Cameras)
         self.menuSource.addSeparator()
         self.menuSource.addAction(self.actionEdit)
         self.menuFacial_Recognition.addAction(self.actionAdd_Face)
@@ -490,7 +505,37 @@ class AutoPTZ_MainWindow(QMainWindow):
                           path=constants.TRAINER_PATH, recursive=True)
         observer.start()
         self.translateUi(self)
+        self.apply_default_view_count()
         QtCore.QMetaObject.connectSlotsByName(self)
+
+    def _default_view_count_for_camera_total(self, camera_count):
+        if camera_count <= 1:
+            return 1
+        if camera_count <= 4:
+            return 4
+        if camera_count <= 6:
+            return 6
+        if camera_count <= 9:
+            return 9
+        return 12
+
+    def apply_default_view_count(self):
+        if not self.view_mode_auto:
+            return
+        default_count = self._default_view_count_for_camera_total(len(self.active_camera_widgets))
+        self.overview.set_visible_slots(default_count)
+
+    def handle_view_count_change(self, value):
+        if value == 'Auto':
+            self.view_mode_auto = True
+            self.apply_default_view_count()
+            return
+
+        self.view_mode_auto = False
+        try:
+            self.overview.set_visible_slots(int(value))
+        except ValueError:
+            self.overview.set_visible_slots(1)
 
     def findHardwareSources(self):
         """Adds camera sources to the Hardware source list"""
@@ -528,10 +573,15 @@ class AutoPTZ_MainWindow(QMainWindow):
     def addCameraWidget(self, source, menu_item, manager, isNDI=False):
         """Add NDI/Serial camera source from the menu to the FlowLayout"""
 
+        if isinstance(source, str) and source in self.network_camera_urls:
+            return
+
         camera_widget = CameraWidget(source=source, width=self.screen_width // 3, height=self.screen_height // 3,
                                      isNDI=isNDI, manager=self.manager)
-        if isNDI is False:
+        if isNDI is False and isinstance(source, int):
             constants.RUNNING_HARDWARE_CAMERA_WIDGETS.append(camera_widget)
+        if isinstance(source, str):
+            self.network_camera_urls.add(source)
         camera_widget.change_selection_signal.connect(self.updateElements)
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
@@ -539,6 +589,9 @@ class AutoPTZ_MainWindow(QMainWindow):
                                                                          camera_widget=camera_widget))
         self.watch_trainer.add_camera(camera_widget=camera_widget)
         self.flowLayout.addWidget(camera_widget)
+        self.active_camera_widgets.append(camera_widget)
+        self.overview.set_camera_widgets(self.active_camera_widgets)
+        self.apply_default_view_count()
         camera_widget.show()
 
     def deleteCameraWidget(self, source, menu_item, camera_widget):
@@ -555,8 +608,58 @@ class AutoPTZ_MainWindow(QMainWindow):
         if constants.CURRENT_ACTIVE_CAM_WIDGET == camera_widget:
             constants.CURRENT_ACTIVE_CAM_WIDGET = None
             self.updateElements()
+        if camera_widget in self.active_camera_widgets:
+            self.active_camera_widgets.remove(camera_widget)
+        if isinstance(source, str) and source in self.network_camera_urls:
+            self.network_camera_urls.remove(source)
+        self.overview.set_camera_widgets(self.active_camera_widgets)
+        self.apply_default_view_count()
         camera_widget.stop()
         camera_widget.deleteLater()
+
+    def auto_add_network_cameras(self):
+        """Scan local network and auto-add discoverable IP cameras with minimal user input."""
+        self.statusbar.showMessage("Scanning local network for IP cameras...")
+        QtWidgets.QApplication.processEvents()
+
+        discovery = CameraAutoDiscovery()
+        found = discovery.discover()
+
+        if not found:
+            self.statusbar.showMessage("No network cameras discovered", 5000)
+            show_info_messagebox(info_message="No network cameras were discovered on local subnets.")
+            return
+
+        added = 0
+        listed = 0
+        for cam in found:
+            rtsp_url = cam.get("suggested_rtsp_url")
+
+            menu_item = QtWidgets.QWidgetAction(self)
+            menu_item.setCheckable(True)
+            menu_item.setText(f"{cam['label']} [{cam['communication_method']} | {cam['confidence']}]")
+
+            if rtsp_url:
+                menu_item.triggered.connect(self.create_lambda(
+                    src=rtsp_url, menu_item=menu_item, isNDI=False))
+            else:
+                # non-RTSP candidates are listed but not auto-addable yet
+                menu_item.setEnabled(False)
+
+            self.menuAdd_IP_Cameras.addAction(menu_item)
+            listed += 1
+
+            # Auto-add immediately for low-friction onboarding
+            if rtsp_url and rtsp_url not in self.network_camera_urls:
+                self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
+                added += 1
+
+            # Keep UI manageable: auto-add up to 12 discovered feeds in one pass
+            if added >= 12:
+                break
+
+        self.statusbar.showMessage(f"Auto-discovery complete: added {added} / listed {listed} network camera candidates", 8000)
+        show_info_messagebox(info_message=f"Discovery complete. Added {added} IP cameras automatically and listed {listed} candidates.")
 
     def updateElements(self):
         """
@@ -834,9 +937,10 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionSave.setText(_translate("AutoPTZ", "Save"))
         self.actionSave_as.setText(_translate("AutoPTZ", "Save As"))
         self.actionClose.setText(_translate("AutoPTZ", "Close"))
-        self.actionAdd_IP.setText(_translate("AutoPTZ", "Add IP"))
+        self.actionAdd_IP.setText(_translate("AutoPTZ", "Auto Add Network Cameras"))
         self.menuAdd_NDI.setTitle(_translate("AutoPTZ", "Add NDI"))
         self.menuAdd_Hardware.setTitle(_translate("AutoPTZ", "Add Hardware"))
+        self.menuAdd_IP_Cameras.setTitle(_translate("AutoPTZ", "Add IP Cameras"))
         self.actionEdit.setText(_translate("AutoPTZ", "Edit Setup"))
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))

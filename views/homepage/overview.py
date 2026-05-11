@@ -2,7 +2,6 @@ from PySide6.QtWidgets import QWidget, QLabel, QGridLayout
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap
 import shared.constants as constants
-import numpy as np
 
 
 class GridOverview(QWidget):
@@ -11,27 +10,66 @@ class GridOverview(QWidget):
     def __init__(self, parent=None, slots=12):
         super().__init__(parent)
         self.slots = slots
+        self.visible_slots = 1
+        self.camera_widgets = []
         self.layout = QGridLayout(self)
+        self.layout.setSpacing(8)
         self.labels = []
         for i in range(self.slots):
             lbl = QLabel(self)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setText(f"Camera {i+1}")
+            lbl.setText(f"Camera {i + 1}")
             lbl.setStyleSheet('background:#111; color:#ddd; border-radius:6px;')
             lbl.setMinimumSize(160, 90)
             self.labels.append(lbl)
-            r = i // 4
-            c = i % 4
-            self.layout.addWidget(lbl, r, c)
+
+        self._relayout_labels()
 
         # timer to refresh snapshots
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(500)
 
+    def set_visible_slots(self, count):
+        count = max(1, min(self.slots, int(count)))
+        if self.visible_slots == count:
+            return
+        self.visible_slots = count
+        self._relayout_labels()
+
+    def set_camera_widgets(self, widgets):
+        self.camera_widgets = list(widgets)
+
+    def _columns_for_visible_count(self, count):
+        # Keep large counts readable and responsive
+        if count <= 1:
+            return 1
+        if count <= 4:
+            return 2
+        if count <= 6:
+            return 3
+        return 4
+
+    def _relayout_labels(self):
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            if item and item.widget():
+                item.widget().setParent(self)
+
+        columns = self._columns_for_visible_count(self.visible_slots)
+
+        for i, lbl in enumerate(self.labels):
+            if i < self.visible_slots:
+                lbl.show()
+                r = i // columns
+                c = i % columns
+                self.layout.addWidget(lbl, r, c)
+            else:
+                lbl.hide()
+
     def refresh(self):
-        cams = list(constants.RUNNING_HARDWARE_CAMERA_WIDGETS)
-        for i in range(self.slots):
+        cams = self.camera_widgets if self.camera_widgets else list(constants.RUNNING_HARDWARE_CAMERA_WIDGETS)
+        for i in range(self.visible_slots):
             lbl = self.labels[i]
             if i < len(cams):
                 cam = cams[i]
@@ -50,4 +88,5 @@ class GridOverview(QWidget):
                 except Exception:
                     pass
             # fallback
-            lbl.setText(lbl.text())
+            lbl.setPixmap(QPixmap())
+            lbl.setText(f"Camera {i + 1}")

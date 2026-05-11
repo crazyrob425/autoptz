@@ -65,6 +65,9 @@ def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
         if os.name == 'nt':  # fixes Windows OpenCV resolution
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 5000)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 5000)
+    elif isinstance(source, str):
+        print(f"Camera Stream service is starting for Network Stream: {source}")
+        cap = cv2.VideoCapture(source)
     else:
         if not NDI_AVAILABLE:
             print(f"NDI not available - skipping NDI source: {source}")
@@ -82,7 +85,7 @@ def run_camera_stream(shared_frames, source, width, stop_signal, isNDI=False):
         ndi.recv_connect(ndi_recv, source)
 
     while not stop_signal.value:
-        if type(source) == int:
+        if type(source) == int or isinstance(source, str):
             ret, img = cap.read()
             if ret:
                 cv_img = imutils.resize(img, width)
@@ -142,8 +145,12 @@ class CameraWidget(QLabel):
             self.setText(f"Camera Source: {source.ndi_name}")
             self.setObjectName(f"Camera Source: {source.ndi_name}")
         else:
-            self.setText(f"Camera Source: {source}")
-            self.setObjectName(f"Camera Source: {source}")
+            if isinstance(source, str) and source.startswith("rtsp"):
+                self.setText(f"RTSP: {source}")
+                self.setObjectName(f"RTSP: {source}")
+            else:
+                self.setText(f"Camera Source: {source}")
+                self.setObjectName(f"Camera Source: {source}")
         self.mouseReleaseEvent = lambda event, widget=self: self.clicked_widget(
             event, widget)
 

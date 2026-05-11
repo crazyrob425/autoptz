@@ -8,6 +8,9 @@ scipy
 watchdog
 pyserial
 ndi-python
+python-nmap
+onvif-zeep
+scapy
 tensorflow
 mediapipe
 visca_over_ip
