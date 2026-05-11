@@ -17,4 +17,6 @@ visca_over_ip
 face_recognition
 torch
 torchvision
+anthropic
+mcp
 # conda install -c conda-forge dlib

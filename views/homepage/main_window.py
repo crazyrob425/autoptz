@@ -28,6 +28,17 @@ from PySide6.QtWidgets import QStackedWidget, QWidget
 from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
 
+# AI Setup Wizard imports (gracefully optional)
+try:
+    from logic.ai_setup.mcp_camera_server import CameraSetupMCPServer
+    from logic.ai_setup.wizard_ai_controller import WizardAIController
+    from views.functions.setup_wizard import launch_setup_wizard
+    AI_WIZARD_AVAILABLE = True
+except ImportError as e:
+    AI_WIZARD_AVAILABLE = False
+    import logging
+    logging.debug(f"AI Setup Wizard not available: {e}")
+
 
 class AutoPTZ_MainWindow(QMainWindow):
     """
@@ -458,6 +469,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.actionManage_IP_Credentials = QtWidgets.QWidgetAction(self)
         self.actionManage_IP_Credentials.setObjectName("actionManage_IP_Credentials")
         self.actionManage_IP_Credentials.triggered.connect(self.open_credentials_dialog)
+        
+        # Setup Wizard action
+        if AI_WIZARD_AVAILABLE:
+            self.actionSetupWizard = QtWidgets.QWidgetAction(self)
+            self.actionSetupWizard.setObjectName("actionSetupWizard")
+            self.actionSetupWizard.triggered.connect(self.launch_setup_wizard_dialog)
+        
         self.menuAdd_NDI = QtWidgets.QMenu(self)
         self.menuAdd_NDI.setObjectName("menuAdd_NDI")
         self.menuAdd_Hardware = QtWidgets.QMenu(self)
@@ -495,6 +513,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuSource.addMenu(self.menuAdd_IP_Cameras)
         self.menuSource.addSeparator()
         self.menuSource.addAction(self.actionManage_IP_Credentials)
+        if AI_WIZARD_AVAILABLE:
+            self.menuSource.addAction(self.actionSetupWizard)
         self.menuSource.addAction(self.actionEdit)
         self.menuFacial_Recognition.addAction(self.actionAdd_Face)
         self.menuFacial_Recognition.addAction(self.actionRemove_Face)
@@ -534,6 +554,40 @@ class AutoPTZ_MainWindow(QMainWindow):
     def open_credentials_dialog(self):
         dlg = IPCredentialsDialog(self.credential_manager, self)
         dlg.exec()
+
+    def launch_setup_wizard_dialog(self):
+        """Launch AI-guided camera setup wizard"""
+        if not AI_WIZARD_AVAILABLE:
+            show_info_messagebox(info_message="Setup Wizard requires additional dependencies.\nPlease install: pip install anthropic mcp")
+            return
+
+        try:
+            # Initialize MCP server with camera operations
+            mcp_server = CameraSetupMCPServer()
+
+            # Initialize AI controller
+            ai_controller = WizardAIController(
+                mcp_server=mcp_server
+            )
+
+            # Launch wizard dialog
+            wizard = launch_setup_wizard(
+                parent=self,
+                ai_controller=ai_controller,
+                mcp_server=mcp_server
+            )
+
+            if wizard:
+                wizard.exec()
+                # Optionally handle wizard results here
+                setup_data = wizard.setup_data
+                if setup_data:
+                    self.statusbar.showMessage("Camera setup wizard completed", 5000)
+
+        except Exception as e:
+            import logging
+            logging.exception("Setup wizard error")
+            show_info_messagebox(info_message=f"Setup wizard error: {str(e)}")
 
     def start_auto_scan_async(self):
         """Start cancellable async network scan and auto-onboard cameras."""
@@ -1102,6 +1156,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.menuAdd_Hardware.setTitle(_translate("AutoPTZ", "Add Hardware"))
         self.menuAdd_IP_Cameras.setTitle(_translate("AutoPTZ", "Add IP Cameras"))
         self.actionManage_IP_Credentials.setText(_translate("AutoPTZ", "Manage IP Credentials"))
+        if AI_WIZARD_AVAILABLE:
+            self.actionSetupWizard.setText(_translate("AutoPTZ", "🤖 AI Setup Wizard"))
         self.actionEdit.setText(_translate("AutoPTZ", "Edit Setup"))
         self.actionContact.setText(_translate("AutoPTZ", "Contact"))
         self.actionAbout.setText(_translate("AutoPTZ", "About"))
