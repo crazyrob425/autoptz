@@ -29,6 +29,7 @@ except ImportError:
 
 from logic.camera_search.search_ndi import get_ndi_sources
 from logic.image_processing.facial_recognition import FacialRecognition
+from logic.image_processing.auto_registration import AutoRegistrationManager
 from logic.recording.recorder import Recorder
 import shared.constants as constants
 
@@ -119,6 +120,7 @@ class CameraWidget(QLabel):
     With the latest frame, Dlib Object Tracking is in use and works alongside with Face Recognition to fix any inconsistencies when tracking.
     """
     change_selection_signal = Signal()
+    motion_state_changed = Signal(str, bool)
     start_time = time.time()
     display_time = 2
     fc = 0
@@ -147,6 +149,8 @@ class CameraWidget(QLabel):
         self.recorder = Recorder()
         self._last_logged_face = None  # Track last logged face to avoid spam
         self._tracking_start_logged = False  # Track if we've logged tracking start
+        self._prev_motion_gray = None
+        self._motion_state = False
         if self.isNDI:
             self.setText(f"Camera Source: {source.ndi_name}")
             self.setObjectName(f"Camera Source: {source.ndi_name}")
@@ -163,6 +167,7 @@ class CameraWidget(QLabel):
         # PTZ Movement
         self.last_request = None
         self.ptz_controller = None
+        self.auto_registration_manager = getattr(constants, 'AUTO_REGISTRATION_MANAGER', None)
 
         if isNDI:
             if NDI_AVAILABLE:
@@ -243,6 +248,10 @@ class CameraWidget(QLabel):
                     ndi.recv_ptz_pan_tilt_speed(
                         instance=self.ptz_controller, pan_speed=0, tilt_speed=0)
         self.stop_signal.value = True
+        try:
+            self.motion_state_changed.emit(self.objectName(), False)
+        except Exception:
+            pass
         self.deleteLater()
         self.destroy()
 
@@ -318,6 +327,39 @@ class CameraWidget(QLabel):
             cv_img = self.draw_on_frame(frame=cv_img)
             qt_img = self.convert_cv_qt(cv_img)
             self.setPixmap(qt_img)
+
+    def _normalize_frame(self, frame):
+        if frame is None:
+            return None
+        if len(frame.shape) == 2:
+            return frame
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def _update_motion_state(self, frame):
+        gray = self._normalize_frame(frame)
+        if gray is None:
+            return frame
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+        if self._prev_motion_gray is None:
+            self._prev_motion_gray = gray
+            return frame
+
+        frame_delta = cv2.absdiff(self._prev_motion_gray, gray)
+        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+        motion_ratio = float(cv2.countNonZero(thresh)) / float(thresh.size or 1)
+        threshold = float(getattr(self, 'motion_threshold', getattr(constants, 'MOTION_THRESHOLD', 0.03)))
+        is_moving = motion_ratio >= threshold
+        if is_moving != self._motion_state:
+            self._motion_state = is_moving
+            self.is_moving = is_moving
+            try:
+                self.motion_state_changed.emit(self.objectName(), is_moving)
+            except Exception:
+                pass
+        self._prev_motion_gray = gray
+        return frame
 
     def convert_cv_qt(self, cv_img):
         """Convert from an opencv image to QPixmap"""
@@ -408,7 +450,7 @@ class CameraWidget(QLabel):
         centroid_y = None
 
         # Get the facial recognition results
-        face_details = ([], [], [])
+        face_details = {"locations": [], "names": [], "confidences": [], "encodings": []}
         if not self.facial_recognition_queue.empty():
             face_details = self.facial_recognition_queue.get_nowait()
 
@@ -418,16 +460,30 @@ class CameraWidget(QLabel):
         if not self.body_pose_queue.empty():
             body_pose = self.body_pose_queue.get_nowait()
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+        if frame.ndim == 3 and frame.shape[2] == 4:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+        elif frame.ndim == 3:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        else:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
 
         # Update the tracker
         if self.tracker and self.is_tracking:
             self.tracker.update(rgb_frame)
 
         # Get face rectangle
-        if face_details != ([], [], []):
-            face_locations, face_names, confidences = face_details
-            for (top, right, bottom, left), name, confidence in zip(face_locations, face_names, confidences):
+        if face_details:
+            if isinstance(face_details, dict):
+                face_locations = face_details.get("locations", [])
+                face_names = face_details.get("names", [])
+                confidences = face_details.get("confidences", [])
+                face_encodings = face_details.get("encodings", [])
+            else:
+                face_locations, face_names, confidences = face_details
+                face_encodings = []
+
+            for idx, ((top, right, bottom, left), name, confidence) in enumerate(zip(face_locations, face_names, confidences)):
+                face_encoding = face_encodings[idx] if idx < len(face_encodings) else None
                 top *= 2
                 right *= 2
                 bottom *= 2
@@ -437,6 +493,13 @@ class CameraWidget(QLabel):
                 try:
                     confidence_val = float(confidence) if confidence else 0.0
                     if name != "Unknown" and confidence_val > 0.5:  # Only log recognized faces
+                        attendance_manager = getattr(constants, "ATTENDANCE_MANAGER", None)
+                        if attendance_manager is not None:
+                            attendance_manager.register_sighting(
+                                person_name=name,
+                                camera=self.objectName(),
+                                confidence=confidence_val,
+                            )
                         # Avoid logging the same face repeatedly
                         log_key = f"{name}_{confidence_val:.2f}"
                         if self._last_logged_face != log_key:
@@ -449,6 +512,16 @@ class CameraWidget(QLabel):
                             self._last_logged_face = log_key
                 except Exception as e:
                     print(f"Failed to log face detection: {e}")
+
+                if name == "Unknown" and self.auto_registration_manager is not None and face_encoding is not None:
+                    created_name = self.auto_registration_manager.consider_detection(
+                        face_encoding=face_encoding,
+                        camera_name=self.objectName(),
+                        face_location=(top // 2, right // 2, bottom // 2, left // 2),
+                        frame=frame,
+                    )
+                    if created_name:
+                        print(f"Auto-registered new profile: {created_name}")
 
                 # Draw face rectangle and labels
                 cv2.rectangle(frame, (left, top),
@@ -535,6 +608,9 @@ class CameraWidget(QLabel):
             if self.ptz_controller is not None and centroid_x is not None:
                 self.move_ptz(centroid_x, centroid_y, frame_center_x, frame_center_y,
                               delta_x, delta_y, frame.shape[1], frame.shape[0])
+
+        # update motion
+        frame = self._update_motion_state(frame)
 
         # FPS Counter
         self.fc += 1

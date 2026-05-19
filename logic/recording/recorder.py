@@ -8,12 +8,15 @@ class Recorder:
     """Simple SQLite-backed event/record index for recorded clips and metadata."""
 
     def __init__(self, db_path=None):
-        self.db_path = db_path or os.path.join(os.path.dirname(__file__), '..', '..', 'recordings.db')
+        default_dir = os.path.join(os.path.expanduser('~'), '.autoptz', 'data')
+        default_path = os.path.join(default_dir, 'recordings.db')
+        self.db_path = db_path or default_path
         self.db_path = os.path.abspath(self.db_path)
         self._lock = threading.Lock()
         self._ensure_db()
 
     def _ensure_db(self):
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with self._lock, sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
             c.execute(

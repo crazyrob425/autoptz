@@ -22,11 +22,14 @@ from views.functions.assign_network_ptz_ui import AssignNetworkPTZDlg
 from views.functions.ip_credentials_dialog import IPCredentialsDialog
 from views.functions.network_scan_worker import NetworkScanWorker
 from views.homepage.flow_layout import FlowLayout
+from views.homepage.map_view import FloorMapView
 from views.homepage.overview import GridOverview
 from views.homepage.recorded_library import RecordedLibrary
 from PySide6.QtWidgets import QStackedWidget, QWidget
 from shared.watch_trainer_directory import WatchTrainer
 from views.widgets.camera_widget import CameraWidget
+from logic.recording.attendance_manager import AttendanceManager
+from logic.image_processing.auto_registration import AutoRegistrationManager
 
 # AI Setup Wizard imports (gracefully optional)
 try:
@@ -35,6 +38,9 @@ try:
     from views.functions.setup_wizard import launch_setup_wizard
     AI_WIZARD_AVAILABLE = True
 except ImportError as e:
+    CameraSetupMCPServer = None
+    WizardAIController = None
+    launch_setup_wizard = None
     AI_WIZARD_AVAILABLE = False
     import logging
     logging.debug(f"AI Setup Wizard not available: {e}")
@@ -47,6 +53,11 @@ try:
     from views.functions.cloud_settings_dialog import CloudSettingsDialog
     CLOUD_SERVICES_AVAILABLE = True
 except ImportError as e:
+    GoogleOAuthManager = None
+    CloudBackupManager = None
+    FailsafeNode = None
+    FailsafeConfig = None
+    CloudSettingsDialog = None
     CLOUD_SERVICES_AVAILABLE = False
     import logging
     logging.debug(f"Cloud Services not available: {e}")
@@ -70,22 +81,30 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.scan_thread = None
         self.scan_worker = None
         self.scan_progress_dialog = None
+        self.attendance_manager = AttendanceManager()
+        constants.ATTENDANCE_MANAGER = self.attendance_manager
+        self.auto_registration_manager = AutoRegistrationManager()
+        constants.AUTO_REGISTRATION_MANAGER = self.auto_registration_manager
 
         # Initialize cloud services
-        if CLOUD_SERVICES_AVAILABLE:
+        oauth_manager_cls = GoogleOAuthManager
+        backup_manager_cls = CloudBackupManager
+        failsafe_node_cls = FailsafeNode
+        failsafe_config_cls = FailsafeConfig
+        if CLOUD_SERVICES_AVAILABLE and oauth_manager_cls is not None and backup_manager_cls is not None and failsafe_node_cls is not None and failsafe_config_cls is not None:
             try:
-                self.oauth_manager = GoogleOAuthManager()
-                self.backup_manager = CloudBackupManager(
+                self.oauth_manager = oauth_manager_cls()
+                self.backup_manager = backup_manager_cls(
                     oauth_manager=self.oauth_manager,
                     data_dir=constants.TRAINER_PATH if hasattr(constants, 'TRAINER_PATH') else None
                 )
-                failsafe_config = FailsafeConfig(
+                failsafe_config = failsafe_config_cls(
                     enabled=True,
                     backup_interval_hours=6,
                     auto_sync_to_cloud=True,
                     max_local_backups=5,
                 )
-                self.failsafe_node = FailsafeNode(
+                self.failsafe_node = failsafe_node_cls(
                     backup_manager=self.backup_manager,
                     oauth_manager=self.oauth_manager,
                     config=failsafe_config
@@ -448,11 +467,13 @@ class AutoPTZ_MainWindow(QMainWindow):
         # overview and library views
         self.overview = GridOverview()
         self.recorded_library = RecordedLibrary()
+        self.map_view = FloorMapView()
 
         # add pages to stack
         self.camera_stack.addWidget(flow_wrapper)
         self.camera_stack.addWidget(self.overview)
         self.camera_stack.addWidget(self.recorded_library)
+        self.camera_stack.addWidget(self.map_view)
 
         # default to flow layout
         self.camera_stack.setCurrentIndex(0)
@@ -460,8 +481,9 @@ class AutoPTZ_MainWindow(QMainWindow):
 
         # quick view switch buttons
         self.switch_overview_btn = QtWidgets.QPushButton('Overview')
-        self.switch_library_btn = QtWidgets.QPushButton('Library')
+        self.switch_library_btn = QtWidgets.QPushButton('Visitations')
         self.switch_grid_btn = QtWidgets.QPushButton('Grid')
+        self.switch_map_btn = QtWidgets.QPushButton('Map')
         self.view_count_label = QtWidgets.QLabel('Views:')
         self.view_count_combo = QtWidgets.QComboBox()
         self.view_count_combo.addItems(['Auto', '1', '4', '6', '9', '12'])
@@ -470,8 +492,10 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.switch_overview_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.overview))
         self.switch_library_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.recorded_library))
         self.switch_grid_btn.clicked.connect(lambda: self.camera_stack.setCurrentIndex(0))
+        self.switch_map_btn.clicked.connect(lambda: self.camera_stack.setCurrentWidget(self.map_view))
         self.menu_layout.addWidget(self.switch_grid_btn)
         self.menu_layout.addWidget(self.switch_overview_btn)
+        self.menu_layout.addWidget(self.switch_map_btn)
         self.menu_layout.addWidget(self.switch_library_btn)
         self.menu_layout.addWidget(self.view_count_label)
         self.menu_layout.addWidget(self.view_count_combo)
@@ -598,6 +622,11 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.registry_health_timer.timeout.connect(self.run_registry_health_check)
         self.registry_health_timer.start(20000)
 
+        # attendance sweep loop (auto-checkout after absence timeout)
+        self.attendance_timer = QtCore.QTimer(self)
+        self.attendance_timer.timeout.connect(self.run_attendance_sweep)
+        self.attendance_timer.start(60000)
+
         # bootstrap previously enabled cameras from registry
         self.bootstrap_registry_cameras(max_count=12)
 
@@ -645,17 +674,27 @@ class AutoPTZ_MainWindow(QMainWindow):
                 return
 
             # Initialize MCP server with camera operations
-            mcp_server = CameraSetupMCPServer()
+            assert CameraSetupMCPServer is not None
+            assert WizardAIController is not None
+            assert launch_setup_wizard is not None
+            mcp_server_cls = CameraSetupMCPServer
+            wizard_controller_cls = WizardAIController
+            launch_wizard_fn = launch_setup_wizard
+            if mcp_server_cls is None or wizard_controller_cls is None or launch_wizard_fn is None:
+                show_info_messagebox(info_message="Setup wizard components are unavailable.")
+                return
+
+            mcp_server = mcp_server_cls()
 
             # Initialize AI controller
-            ai_controller = WizardAIController(
+            ai_controller = wizard_controller_cls(
                 api_key=openai_key or anthropic_key,
                 provider='openai' if openai_key else 'anthropic',
                 mcp_server=mcp_server
             )
 
             # Launch wizard dialog
-            wizard = launch_setup_wizard(
+            wizard = launch_wizard_fn(
                 parent=self,
                 ai_controller=ai_controller,
                 mcp_server=mcp_server
@@ -680,7 +719,12 @@ class AutoPTZ_MainWindow(QMainWindow):
             return
 
         try:
-            dialog = CloudSettingsDialog(
+            cloud_dialog_cls = CloudSettingsDialog
+            if cloud_dialog_cls is None:
+                show_info_messagebox(info_message="Cloud settings dialog is unavailable.")
+                return
+
+            dialog = cloud_dialog_cls(
                 oauth_manager=self.oauth_manager,
                 backup_manager=self.backup_manager,
                 failsafe_node=self.failsafe_node,
@@ -798,8 +842,9 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def findNDISources(self):
         """Adds NDI sources to the NDI source list"""
-        constants.NDI_SOURCE_LIST = get_ndi_sources()
-        for index, cam in enumerate(constants.NDI_SOURCE_LIST):
+        ndi_sources = list(get_ndi_sources() or [])
+        constants.NDI_SOURCE_LIST = ndi_sources
+        for index, cam in enumerate(ndi_sources):
             menu_item = QtWidgets.QWidgetAction(self)
             menu_item.setText(cam.ndi_name)
             menu_item.setCheckable(True)
@@ -830,6 +875,10 @@ class AutoPTZ_MainWindow(QMainWindow):
         if isinstance(source, str):
             self.network_camera_urls.add(source)
         camera_widget.change_selection_signal.connect(self.updateElements)
+        try:
+            camera_widget.motion_state_changed.connect(self.map_view.update_camera_motion)
+        except Exception:
+            pass
         menu_item.triggered.disconnect()
         menu_item.triggered.connect(
             lambda index=source, item=menu_item: self.deleteCameraWidget(source=index, menu_item=item,
@@ -838,6 +887,7 @@ class AutoPTZ_MainWindow(QMainWindow):
         self.flowLayout.addWidget(camera_widget)
         self.active_camera_widgets.append(camera_widget)
         self.overview.set_camera_widgets(self.active_camera_widgets)
+        self.map_view.set_camera_widgets(self.active_camera_widgets)
         self.apply_default_view_count()
         camera_widget.show()
 
@@ -860,6 +910,8 @@ class AutoPTZ_MainWindow(QMainWindow):
         if isinstance(source, str) and source in self.network_camera_urls:
             self.network_camera_urls.remove(source)
         self.overview.set_camera_widgets(self.active_camera_widgets)
+        self.map_view.set_camera_widgets(self.active_camera_widgets)
+        self.map_view.unregister_camera_widget(camera_widget)
         self.apply_default_view_count()
         camera_widget.stop()
         camera_widget.deleteLater()
@@ -910,6 +962,8 @@ class AutoPTZ_MainWindow(QMainWindow):
             # Keep UI manageable: auto-add up to 12 discovered feeds in one pass
             if added >= 12:
                 break
+
+        self.map_view.set_camera_widgets(self.active_camera_widgets)
 
         self.statusbar.showMessage(f"Auto-discovery complete: added {added} / listed {listed} network camera candidates", 8000)
         show_info_messagebox(info_message=f"Discovery complete. Added {added} IP cameras automatically and listed {listed} candidates.")
@@ -992,6 +1046,17 @@ class AutoPTZ_MainWindow(QMainWindow):
                     self.addCameraWidget(source=rtsp_url, menu_item=menu_item, manager=self.manager, isNDI=False)
             except Exception:
                 continue
+
+    def run_attendance_sweep(self):
+        """Mark checked-in people as checked out when they have been absent long enough."""
+        try:
+            if hasattr(self, 'attendance_manager') and self.attendance_manager:
+                checked_out = self.attendance_manager.sweep_stale_sessions()
+                if checked_out:
+                    self.statusbar.showMessage(f"Visitations updated: checked out {len(checked_out)} person(s)", 5000)
+        except Exception as e:
+            import logging
+            logging.error(f"Visitations sweep failed: {e}")
 
     def updateElements(self):
         """
@@ -1172,13 +1237,15 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def unassign_usb_ptz(self):
         """Allow User to Unassign current USB PTZ device from Camera Source"""
-        if constants.CURRENT_ACTIVE_CAM_WIDGET is None:
+        cam_widget = constants.CURRENT_ACTIVE_CAM_WIDGET
+        if cam_widget is None:
             show_info_messagebox(
                 info_message="Please select the Hardware Camera Source")
         else:
-            constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
-            constants.IN_USE_USB_PTZ_DEVICES.remove(
-                constants.CURRENT_ACTIVE_PTZ_DEVICE)
+            cam_widget.set_ptz(control=None)
+            if constants.CURRENT_ACTIVE_PTZ_DEVICE in constants.IN_USE_USB_PTZ_DEVICES:
+                constants.IN_USE_USB_PTZ_DEVICES.remove(
+                    constants.CURRENT_ACTIVE_PTZ_DEVICE)
 
     def closeEvent(self, event):
         """Handle application close event - cleanup resources"""
@@ -1189,6 +1256,12 @@ class AutoPTZ_MainWindow(QMainWindow):
         except Exception as e:
             import logging
             logging.error(f"Error stopping failsafe node: {e}")
+
+        try:
+            if hasattr(self, 'attendance_timer') and self.attendance_timer:
+                self.attendance_timer.stop()
+        except Exception:
+            pass
         
         # Clean up scan thread if running
         try:
@@ -1211,7 +1284,9 @@ class AutoPTZ_MainWindow(QMainWindow):
 
     def unassign_network_ptz(self):
         """Allow User to Unassign current Network PTZ device from Camera Source"""
-        constants.CURRENT_ACTIVE_CAM_WIDGET.set_ptz(control=None)
+        cam_widget = constants.CURRENT_ACTIVE_CAM_WIDGET
+        if cam_widget is not None:
+            cam_widget.set_ptz(control=None)
         self.unassign_network_ptz_btn.hide()
         self.assign_network_ptz_btn.show()
 

@@ -28,7 +28,7 @@ class FacialRecognition:
     def recognize(self, frame):
         if not FACE_RECOGNITION_AVAILABLE:
             # Return empty face data when face_recognition isn't available
-            self.queue.put(([], [], []))
+            self.queue.put({"locations": [], "names": [], "confidences": [], "encodings": []})
             return
         
         if frame.shape[2] == 4:
@@ -49,10 +49,10 @@ class FacialRecognition:
         if add_face_name:
             result = self.add_face(face_encodings, add_face_name)
             if result:
-                self.queue.put((face_locations, [add_face_name], [100]))
+                self.queue.put({"locations": face_locations, "names": [add_face_name], "confidences": [1.0], "encodings": face_encodings})
                 return
 
-            self.queue.put(([], [], []))
+            self.queue.put({"locations": [], "names": [], "confidences": [], "encodings": []})
             return
 
         for face_encoding in face_encodings:
@@ -83,7 +83,7 @@ class FacialRecognition:
             
             face_names.append(name)
             confidence_list.append(confidence)
-        face_details = (face_locations, face_names, confidence_list)
+        face_details = {"locations": face_locations, "names": face_names, "confidences": confidence_list, "encodings": face_encodings}
         self.queue.put(face_details)
 
     def set_add_face_name(self, name):
@@ -92,19 +92,104 @@ class FacialRecognition:
     def add_face(self, face_encodings, add_face_name):
         # If a face was found in the frame, add it to the known faces
         if face_encodings:
-            # Add the new face encoding to the known faces
-            self.known_face_encodings['encodings'].append(face_encodings[0])
-            self.known_face_encodings['names'].append(add_face_name)
-
-            # Save the updated known faces back to the file
-            with open(constants.ENCODINGS_PATH, "wb") as f:
-                f.write(pickle.dumps(self.known_face_encodings))
-
+            self._append_face_encoding(add_face_name, face_encodings[0])
             print(f"Added a new face for {add_face_name}")
             # Reset the add_face_name to stop adding the face
             self.set_add_face_name('')
             return True
         return False
+
+    def add_faces_from_images(self, add_face_name, image_paths):
+        """Add one person using multiple photo files."""
+        if not image_paths:
+            return 0
+
+        added = 0
+        for image_path in image_paths:
+            encoding = self._extract_encoding_from_image(image_path)
+            if encoding is None:
+                continue
+            self._append_face_encoding(add_face_name, encoding)
+            added += 1
+
+        if added:
+            print(f"Added {added} face samples for {add_face_name}")
+        return added
+
+    def add_faces_from_encodings(self, add_face_name, encodings):
+        """Add one person using multiple face encodings."""
+        if not encodings:
+            return 0
+
+        added = 0
+        for encoding in encodings:
+            if encoding is None:
+                continue
+            self._append_face_encoding(add_face_name, np.asarray(encoding, dtype=np.float64))
+            added += 1
+        if added:
+            print(f"Added {added} encoding samples for {add_face_name}")
+        return added
+
+    def _append_face_encoding(self, add_face_name, encoding):
+        self.known_face_encodings['encodings'].append(encoding)
+        self.known_face_encodings['names'].append(add_face_name)
+
+        with open(constants.ENCODINGS_PATH, "wb") as f:
+            f.write(pickle.dumps(self.known_face_encodings))
+
+    @staticmethod
+    def rename_label(old_name, new_name):
+        """Rename a face label inside the encodings pickle."""
+        if not old_name or not new_name or old_name == new_name:
+            return False
+        if not os.path.exists(constants.ENCODINGS_PATH):
+            return False
+
+        with open(constants.ENCODINGS_PATH, "rb") as f:
+            data = pickle.load(f)
+
+        if not isinstance(data, dict):
+            return False
+
+        data.setdefault('encodings', [])
+        data.setdefault('names', [])
+        data['names'] = [new_name if name == old_name else name for name in data['names']]
+
+        with open(constants.ENCODINGS_PATH, "wb") as f:
+            pickle.dump(data, f)
+        return True
+
+    @staticmethod
+    def get_known_names():
+        if not os.path.exists(constants.ENCODINGS_PATH):
+            return []
+        with open(constants.ENCODINGS_PATH, "rb") as f:
+            data = pickle.load(f)
+        if not isinstance(data, dict):
+            return []
+        return sorted({name for name in data.get('names', []) if name})
+
+    @staticmethod
+    def _extract_encoding_from_image(image_path):
+        if not os.path.exists(image_path):
+            return None
+
+        image = cv2.imread(image_path)
+        if image is None:
+            return None
+
+        if len(image.shape) == 3 and image.shape[2] == 4:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        else:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        face_locations = face_recognition.face_locations(rgb_image, number_of_times_to_upsample=1, model="hog")
+        if not face_locations:
+            return None
+
+        face_encodings = face_recognition.face_encodings(rgb_image, face_locations, num_jitters=1, model="small")
+        return face_encodings[0] if face_encodings else None
 
     @staticmethod
     def face_confidence(face_distance, face_match_threshold=0.6):

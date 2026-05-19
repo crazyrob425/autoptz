@@ -1,3 +1,4 @@
 {
-    "todo-tree.tree.scanMode": "workspace only"
+    "todo-tree.tree.scanMode": "workspace only",
+    "Codegeex.CompletionModel": "CodeGeeX Pro[Beta]"
 }

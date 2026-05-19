@@ -104,6 +104,8 @@ These features exist in the current codebase:
 - ✅ **Automatic event logging** (face detections, PTZ movements, tracking state)
 - ✅ **Confidence threshold enforcement** (default 0.6, configurable)
 - ✅ **Smart deduplication** (prevents log spam)
+- ✅ **Multi-photo user enrollment** (register one person from several photos)
+- ✅ **Attendance tracking** (check-in / check-out timing with auto-checkout)
 - ✅ **Event search & filters** (full-text, camera, event type)
 - ✅ **Event statistics** (real-time analytics by type)
 - ✅ **Enhanced recorded library UI** (split-pane details + stats)
@@ -149,6 +151,8 @@ These features are under active development or planned for future releases:
 | **Facial Recognition** | ✅ | ✅ | dlib + face_recognition + tracking |
 | **PTZ Control** | ✅ | ✅ | VISCA automation + AI tracking baked in |
 | **Confidence Thresholds** | ✅ | ✅ | Smart filtering to reduce false positives |
+| **Multi-Photo Enrollment** | ✅ | ✅ | Add several photos for one person at once |
+| **Attendance Tracking** | ✅ | ✅ | Check-in / check-out timing with auto checkout |
 | **Event Logging** | ✅ | ✅ | Auto-log face detections, PTZ, tracking |
 | **Event Search & Analytics** | ✅ | ✅ | Full-text search + filters + statistics |
 | **AI Setup Wizard** | ✅ | ✅ | MCP tools for capability discovery |
